@@ -1,23 +1,12 @@
 from __future__ import annotations
 
-import os
-
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from ..ports import preferred_port
 from ..services import updater
 
 router = APIRouter(prefix="/api/updates", tags=["updates"])
-
-# The launcher records the port it bound so the update helper can relaunch on it.
-DEFAULT_PORT = 8000
-
-
-def _port() -> int:
-    try:
-        return int(os.environ.get("APPTRACKER_PORT") or DEFAULT_PORT)
-    except ValueError:
-        return DEFAULT_PORT
 
 
 class UpdateStatus(BaseModel):
@@ -83,7 +72,8 @@ def install() -> dict:
     staged = updater.find_staged()
     if staged is None:
         raise HTTPException(400, "No verified download is waiting to be installed.")
-    if not updater.restart_for_update(_port()):
+    # Relaunch from the preferred port so a busy-port fallback stays a one-off.
+    if not updater.restart_for_update(preferred_port()):
         raise HTTPException(
             400,
             "Could not start the update helper. Install manually from the "

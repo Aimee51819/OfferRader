@@ -1,15 +1,25 @@
-const DEFAULT_BACKEND = "http://localhost:8000";
-
-chrome.storage.sync.get({ backendUrl: DEFAULT_BACKEND }, (items) => {
+chrome.storage.sync.get({ backendUrl: "" }, (items) => {
   document.getElementById("backendUrl").value = items.backendUrl;
 });
 
+function showStatus(msg, kind) {
+  const status = document.getElementById("status");
+  status.textContent = msg;
+  status.className = "status " + kind;
+}
+
 document.getElementById("save").addEventListener("click", () => {
-  const backendUrl = document.getElementById("backendUrl").value.trim() || DEFAULT_BACKEND;
+  // Blank means auto-detect; drop the cached URL so detection starts fresh.
+  const backendUrl = normalizeUrl(document.getElementById("backendUrl").value);
   chrome.storage.sync.set({ backendUrl }, () => {
-    const status = document.getElementById("status");
-    status.textContent = "Saved.";
-    status.className = "status success";
-    setTimeout(() => status.classList.add("hidden"), 1500);
+    chrome.storage.local.remove("detectedBackendUrl", async () => {
+      showStatus("Saved. Looking for AppTracker...", "");
+      try {
+        const found = await resolveBackend();
+        showStatus(`Saved. Connected to ${found}.`, "success");
+      } catch (e) {
+        showStatus(`Saved. ${e.message}`, "error");
+      }
+    });
   });
 });

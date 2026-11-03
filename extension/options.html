@@ -8,11 +8,14 @@
   <body>
     <div class="header">Extension Settings</div>
     <label>Backend URL</label>
-    <input id="backendUrl" type="text" placeholder="http://localhost:8000" />
+    <input id="backendUrl" type="text" placeholder="Auto-detect (ports 8000-8100)" />
+    <div class="hint">Leave blank to find AppTracker automatically. If the address you set
+      stops answering, the extension falls back to auto-detect.</div>
     <div class="actions" style="margin-top: 14px">
       <button id="save" class="btn primary">Save</button>
     </div>
     <div id="status" class="status hidden" style="margin-top: 12px"></div>
+    <script src="backend.js"></script>
     <script src="options.js"></script>
   </body>
 </html>

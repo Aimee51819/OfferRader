@@ -1,13 +1,3 @@
-const DEFAULT_BACKEND = "http://localhost:8000";
-
-function getBackend() {
-  return new Promise((resolve) => {
-    chrome.storage.sync.get({ backendUrl: DEFAULT_BACKEND }, (items) => {
-      resolve((items.backendUrl || DEFAULT_BACKEND).replace(/\/$/, ""));
-    });
-  });
-}
-
 function setStatus(msg, kind) {
   const el = document.getElementById("status");
   el.textContent = msg;
@@ -40,7 +30,7 @@ async function capture() {
       func: extractPageContent,
     });
 
-    const backend = await getBackend();
+    const backend = await resolveBackend();
     setStatus("Parsing with AI...", null);
     const res = await fetch(`${backend}/api/parse`, {
       method: "POST",
@@ -73,7 +63,7 @@ async function save() {
   const saveBtn = document.getElementById("save");
   saveBtn.disabled = true;
   try {
-    const backend = await getBackend();
+    const backend = await resolveBackend();
     const payload = {
       company: document.getElementById("company").value || "Unknown",
       title: document.getElementById("title").value || "Unknown",
@@ -109,6 +99,8 @@ document.getElementById("openOptions").addEventListener("click", (e) => {
   e.preventDefault();
   chrome.runtime.openOptionsPage();
 });
-getBackend().then((backend) => {
-  document.getElementById("openApp").href = backend.replace(":8000", ":5173");
-});
+resolveBackend()
+  .then((backend) => {
+    document.getElementById("openApp").href = backend.replace(":8000", ":5173");
+  })
+  .catch((e) => setStatus(e.message, "error"));

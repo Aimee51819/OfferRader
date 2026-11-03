@@ -74,6 +74,8 @@ make app     # build the frontend, then launch the tray app
 The app sits in the system tray (it does not auto-open the browser).
 Right-click the tray icon to **Open**, run a **Health Check**, enable **Start on Login**, or **Quit**.
 
+The server listens on `http://127.0.0.1:8000`. If that port is busy, the launcher takes the next free port up to 8100, logs which one it chose, and opens the browser there. Pass `--port <number>` to `launcher.py` to start the search somewhere else. Launching again while AppTracker is running just opens the running copy.
+
 > **Windows note:** `make` isn't built in — install it with `winget install GnuWin32.Make` or use [Git Bash](https://gitforwindows.org/).  
 > Alternatively run the two commands manually:
 > ```powershell
@@ -143,7 +145,7 @@ Both suites also run automatically in CI on every push and pull request.
 
 ## API
 
-Interactive API docs are available at http://localhost:8000/docs when the backend is running.
+Interactive API docs are available at http://localhost:8000/docs when the backend is running (swap in the launcher's port if it moved off 8000). `GET /api/identity` returns `{"app": "apptracker"}` so tools can confirm they found AppTracker and not some other app on the port.
 
 ## Download a prebuilt Windows app
 
