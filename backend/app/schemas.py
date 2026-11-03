@@ -102,6 +102,23 @@ class DuplicateGroupOut(BaseModel):
     applications: list[ApplicationOut]
 
 
+class DuplicatePairIn(BaseModel):
+    """Two applications the user says are not duplicates. Order is irrelevant."""
+
+    first_id: int
+    second_id: int
+
+
+class DismissedDuplicateOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    low_id: int
+    high_id: int
+    created_at: datetime
+    # Filled in by the list endpoint so the UI can name the pair.
+    applications: list[ApplicationOut] = []
+
+
 # ---------- Parsing ----------
 class ParseRequest(BaseModel):
     text: str = Field(..., min_length=1)

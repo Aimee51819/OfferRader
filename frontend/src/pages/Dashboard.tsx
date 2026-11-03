@@ -2,7 +2,12 @@ import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import type { Application, ApplicationStatus } from "../api/types";
+import type {
+  Application,
+  ApplicationStatus,
+  DismissedDuplicate,
+  DuplicateGroup,
+} from "../api/types";
 import { STATUSES, STATUS_COLORS, STATUS_LABELS, DEFAULT_HIDDEN_BOARD_STATUSES } from "../lib/statuses";
 import StatusBadge from "../components/StatusBadge";
 
@@ -93,14 +98,39 @@ function mergeTarget(pair: Application[]): [Application, Application] {
   return score(second) > score(first) ? [second, first] : [first, second];
 }
 
+const pairKey = (pair: { applications: Application[] }) =>
+  pair.applications
+    .map((a) => a.id)
+    .sort((x, y) => x - y)
+    .join("-");
+
+// Shared by dismiss and restore so overlapping requests can tell whether
+// they're the last one in flight (see onSettled below).
+const DISMISSAL_MUTATION = ["duplicate-dismissal"];
+
 function DuplicateBanner() {
   const queryClient = useQueryClient();
-  const [dismissed, setDismissed] = useState(false);
+  // "Hide" only collapses the banner for this visit; it never writes anything.
+  const [hidden, setHidden] = useState(false);
+  const [showDismissed, setShowDismissed] = useState(false);
 
   const { data: groups = [] } = useQuery({
     queryKey: ["duplicates"],
     queryFn: () => api.listDuplicates(),
   });
+
+  const { data: dismissedPairs = [] } = useQuery({
+    queryKey: ["duplicates", "dismissed"],
+    queryFn: () => api.listDismissedDuplicates(),
+  });
+
+  // Refetch only once the last overlapping dismiss/restore settles, so an
+  // early response can't overwrite a later optimistic update with stale data.
+  const refetchWhenIdle = () => {
+    if (queryClient.isMutating({ mutationKey: DISMISSAL_MUTATION }) === 1) {
+      queryClient.invalidateQueries({ queryKey: ["duplicates"] });
+    }
+  };
 
   const merge = useMutation({
     mutationFn: ({ source, target }: { source: number; target: number }) =>
@@ -111,7 +141,91 @@ function DuplicateBanner() {
     },
   });
 
-  if (dismissed || groups.length === 0) return null;
+  // Dismissals are stored server-side; drop the pair from the cache up front
+  // so the banner updates immediately. On failure the refetch brings it back
+  // (no snapshot restore, which could resurrect a concurrent dismissal).
+  const dismiss = useMutation({
+    mutationKey: DISMISSAL_MUTATION,
+    mutationFn: (g: DuplicateGroup) =>
+      api.dismissDuplicate(g.applications[0].id, g.applications[1].id),
+    onMutate: async (g) => {
+      await queryClient.cancelQueries({ queryKey: ["duplicates"] });
+      queryClient.setQueryData<DuplicateGroup[]>(["duplicates"], (old = []) =>
+        old.filter((x) => pairKey(x) !== pairKey(g))
+      );
+    },
+    onSettled: refetchWhenIdle,
+  });
+
+  const restore = useMutation({
+    mutationKey: DISMISSAL_MUTATION,
+    mutationFn: (d: DismissedDuplicate) => api.restoreDuplicate(d.low_id, d.high_id),
+    onMutate: async (d) => {
+      await queryClient.cancelQueries({ queryKey: ["duplicates"] });
+      queryClient.setQueryData<DismissedDuplicate[]>(
+        ["duplicates", "dismissed"],
+        (old = []) => old.filter((x) => pairKey(x) !== pairKey(d))
+      );
+    },
+    onSettled: refetchWhenIdle,
+  });
+
+  const error = (dismiss.error ?? restore.error) as Error | null;
+
+  if (hidden || (groups.length === 0 && dismissedPairs.length === 0)) return null;
+
+  const dismissedToggle = dismissedPairs.length > 0 && (
+    <button
+      className="btn-secondary"
+      style={{ padding: "2px 8px", fontSize: 12 }}
+      onClick={() => setShowDismissed((v) => !v)}
+    >
+      {showDismissed ? "Hide dismissed" : `Dismissed (${dismissedPairs.length})`}
+    </button>
+  );
+
+  const dismissedList = showDismissed && dismissedPairs.length > 0 && (
+    <div className="stack" style={{ marginTop: 10, gap: 8 }}>
+      {dismissedPairs.map((d) => (
+        <div
+          key={pairKey(d)}
+          className="flex-between"
+          style={{ gap: 12, alignItems: "flex-start" }}
+        >
+          <div className="muted" style={{ fontSize: 12 }}>
+            <strong>{d.applications[0].company}</strong>
+            {": "}
+            <Link to={`/applications/${d.low_id}`}>{d.applications[0].title}</Link>
+            {" + "}
+            <Link to={`/applications/${d.high_id}`}>{d.applications[1].title}</Link>
+          </div>
+          <button
+            className="btn-secondary"
+            style={{ whiteSpace: "nowrap" }}
+            title="Suggest this pair as a possible duplicate again"
+            onClick={() => restore.mutate(d)}
+          >
+            Restore
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+
+  // Nothing to suggest: just a quiet way back to the dismissed pairs.
+  if (groups.length === 0) {
+    return (
+      <div style={{ marginBottom: 14 }}>
+        <div className="flex-between">
+          <span className="muted" style={{ fontSize: 12 }}>
+            No possible duplicates
+          </span>
+          {dismissedToggle}
+        </div>
+        {dismissedList}
+      </div>
+    );
+  }
 
   return (
     <div className="alert alert-info" style={{ marginBottom: 14 }}>
@@ -120,20 +234,30 @@ function DuplicateBanner() {
           {groups.length} possible duplicate
           {groups.length === 1 ? "" : "s"}
         </strong>
-        <button
-          className="btn-secondary"
-          style={{ padding: "2px 8px", fontSize: 12 }}
-          onClick={() => setDismissed(true)}
-        >
-          Hide
-        </button>
+        <div style={{ display: "flex", gap: 6 }}>
+          {dismissedToggle}
+          <button
+            className="btn-secondary"
+            style={{ padding: "2px 8px", fontSize: 12 }}
+            title="Hide this banner for now; suggestions come back next visit"
+            onClick={() => setHidden(true)}
+          >
+            Hide
+          </button>
+        </div>
       </div>
+      {error && (
+        <div style={{ fontSize: 12, marginTop: 6 }}>
+          Couldn't save: {error.message}
+        </div>
+      )}
+      {dismissedList}
       <div className="stack" style={{ marginTop: 10, gap: 8 }}>
         {groups.map((g) => {
           const [target, source] = mergeTarget(g.applications);
           return (
             <div
-              key={`${target.id}-${source.id}`}
+              key={pairKey(g)}
               className="flex-between"
               style={{ gap: 12, alignItems: "flex-start" }}
             >
@@ -150,16 +274,26 @@ function DuplicateBanner() {
                   <Link to={`/applications/${source.id}`}>{source.title}</Link>
                 </div>
               </div>
-              <button
-                className="btn-secondary"
-                disabled={merge.isPending}
-                style={{ whiteSpace: "nowrap" }}
-                onClick={() =>
-                  merge.mutate({ source: source.id, target: target.id })
-                }
-              >
-                Merge
-              </button>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button
+                  className="btn-secondary"
+                  style={{ whiteSpace: "nowrap" }}
+                  title="These are different applications; stop suggesting this pair"
+                  onClick={() => dismiss.mutate(g)}
+                >
+                  Not a duplicate
+                </button>
+                <button
+                  className="btn-secondary"
+                  disabled={merge.isPending}
+                  style={{ whiteSpace: "nowrap" }}
+                  onClick={() =>
+                    merge.mutate({ source: source.id, target: target.id })
+                  }
+                >
+                  Merge
+                </button>
+              </div>
             </div>
           );
         })}

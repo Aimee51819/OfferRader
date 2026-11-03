@@ -8,13 +8,15 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
-from sqlalchemy import or_, select
+from sqlalchemy import delete, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..models import (
     Application,
     ApplicationStatus,
+    DismissedDuplicate,
     EventSource,
     ProcessedEmail,
     StatusEvent,
@@ -25,7 +27,9 @@ from ..schemas import (
     ApplicationDetailOut,
     ApplicationOut,
     ApplicationUpdate,
+    DismissedDuplicateOut,
     DuplicateGroupOut,
+    DuplicatePairIn,
     EmailActivityOut,
     MergeApplicationsIn,
     MessageOut,
@@ -314,6 +318,12 @@ def list_duplicate_candidates(db: Session = Depends(get_db)) -> list[DuplicateGr
     titles must overlap heavily to be suggested.
     """
     apps = list(db.execute(select(Application)).scalars().all())
+    dismissed = {
+        (low, high)
+        for low, high in db.execute(
+            select(DismissedDuplicate.low_id, DismissedDuplicate.high_id)
+        ).all()
+    }
     by_company: dict[str, list[Application]] = {}
     for app in apps:
         key = normalize_label(app.company)
@@ -326,6 +336,8 @@ def list_duplicate_candidates(db: Session = Depends(get_db)) -> list[DuplicateGr
             continue
         for i, first in enumerate(company_apps):
             for second in company_apps[i + 1 :]:
+                if _pair_key(first.id, second.id) in dismissed:
+                    continue  # user said these are genuinely different
                 jid_a = (first.job_id or "").strip()
                 jid_b = (second.job_id or "").strip()
                 if jid_a and jid_b and jid_a != jid_b:
@@ -351,6 +363,98 @@ def list_duplicate_candidates(db: Session = Depends(get_db)) -> list[DuplicateGr
                     )
                 )
     return groups
+
+
+def _pair_key(a: int, b: int) -> tuple[int, int]:
+    return (a, b) if a < b else (b, a)
+
+
+def _forget_dismissals(db: Session, app_id: int) -> None:
+    """Drop dismissals naming an application that is about to disappear.
+
+    SQLite reuses the highest rowid after a delete, so a stale row could
+    otherwise silently hide a future, unrelated pair.
+    """
+    db.execute(
+        delete(DismissedDuplicate).where(
+            or_(DismissedDuplicate.low_id == app_id, DismissedDuplicate.high_id == app_id)
+        )
+    )
+
+
+@router.get("/duplicates/dismissed", response_model=list[DismissedDuplicateOut])
+def list_dismissed_duplicates(db: Session = Depends(get_db)) -> list[DismissedDuplicateOut]:
+    rows = db.execute(
+        select(DismissedDuplicate).order_by(
+            DismissedDuplicate.created_at.desc(), DismissedDuplicate.id.desc()
+        )
+    ).scalars().all()
+    ids = {i for r in rows for i in (r.low_id, r.high_id)}
+    apps = {
+        a.id: a
+        for a in db.execute(select(Application).where(Application.id.in_(ids))).scalars()
+    }
+    out: list[DismissedDuplicateOut] = []
+    for r in rows:
+        low, high = apps.get(r.low_id), apps.get(r.high_id)
+        if low is None or high is None:
+            continue  # orphaned row; never surface a pair we can't name
+        out.append(
+            DismissedDuplicateOut(
+                low_id=r.low_id,
+                high_id=r.high_id,
+                created_at=r.created_at,
+                applications=[
+                    ApplicationOut.model_validate(low),
+                    ApplicationOut.model_validate(high),
+                ],
+            )
+        )
+    return out
+
+
+@router.post("/duplicates/dismiss", response_model=DismissedDuplicateOut)
+def dismiss_duplicate(
+    payload: DuplicatePairIn, db: Session = Depends(get_db)
+) -> DismissedDuplicate:
+    """Stop suggesting this pair. Idempotent and order-independent."""
+    if payload.first_id == payload.second_id:
+        raise HTTPException(status_code=400, detail="A pair needs two different applications")
+    low, high = _pair_key(payload.first_id, payload.second_id)
+    if db.get(Application, low) is None or db.get(Application, high) is None:
+        raise HTTPException(status_code=404, detail="Application not found")
+
+    stmt = select(DismissedDuplicate).where(
+        DismissedDuplicate.low_id == low, DismissedDuplicate.high_id == high
+    )
+    existing = db.execute(stmt).scalar_one_or_none()
+    if existing is not None:
+        return existing
+    row = DismissedDuplicate(low_id=low, high_id=high)
+    db.add(row)
+    try:
+        db.commit()
+    except IntegrityError:
+        # A concurrent request inserted the same pair first.
+        db.rollback()
+        return db.execute(stmt).scalar_one()
+    db.refresh(row)
+    return row
+
+
+@router.delete("/duplicates/dismissed/{first_id}/{second_id}", response_model=MessageOut)
+def restore_duplicate(
+    first_id: int, second_id: int, db: Session = Depends(get_db)
+) -> MessageOut:
+    """Undo a dismissal so the pair can be suggested again. Idempotent."""
+    low, high = _pair_key(first_id, second_id)
+    db.execute(
+        delete(DismissedDuplicate).where(
+            DismissedDuplicate.low_id == low, DismissedDuplicate.high_id == high
+        )
+    )
+    db.commit()
+    return MessageOut(message="Duplicate suggestion restored")
 
 
 @router.post("/merge", response_model=ApplicationDetailOut)
@@ -411,6 +515,7 @@ def merge_applications(
             source=EventSource.system,
         )
     )
+    _forget_dismissals(db, source.id)
     db.delete(source)
     db.commit()
     db.refresh(target)
@@ -519,6 +624,7 @@ def delete_application(app_id: int, db: Session = Depends(get_db)) -> MessageOut
     app = db.get(Application, app_id)
     if app is None:
         raise HTTPException(status_code=404, detail="Application not found")
+    _forget_dismissals(db, app.id)
     db.delete(app)
     db.commit()
     return MessageOut(message="Application deleted")

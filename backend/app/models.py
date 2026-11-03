@@ -11,6 +11,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -105,6 +106,27 @@ class StatusEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
     application: Mapped["Application"] = relationship(back_populates="events")
+
+
+class DismissedDuplicate(Base):
+    """A pair the user said is not a duplicate, so it stops being suggested.
+
+    Stored order-independently: low_id is always the smaller application id.
+    SQLite doesn't enforce FKs here, so deleting/merging an application also
+    removes its rows explicitly (see api/applications.py).
+    """
+
+    __tablename__ = "dismissed_duplicates"
+    __table_args__ = (UniqueConstraint("low_id", "high_id", name="uq_dismissed_pair"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    low_id: Mapped[int] = mapped_column(
+        ForeignKey("applications.id", ondelete="CASCADE"), index=True
+    )
+    high_id: Mapped[int] = mapped_column(
+        ForeignKey("applications.id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
 class EmailAccount(Base):
