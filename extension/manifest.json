@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Job Application Tracker - Capture",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Capture the job listing on the current page into your Job Application Tracker in one click.",
   "action": {
     "default_popup": "popup.html",
@@ -9,8 +9,8 @@
   },
   "permissions": ["activeTab", "scripting", "storage"],
   "host_permissions": [
-    "http://localhost:8000/*",
-    "http://127.0.0.1:8000/*"
+    "http://localhost/*",
+    "http://127.0.0.1/*"
   ],
   "options_page": "options.html",
   "icons": {

@@ -80,3 +80,37 @@ def test_find_staged_returns_the_highest_version(tmp_path, monkeypatch):
     found = updater.find_staged()
     assert found is not None
     assert found[0] == "9.0.10"
+
+
+def test_install_relaunches_on_the_preferred_port(client, tmp_path, monkeypatch):
+    """A busy-port fallback must not become the relaunched instance's preference."""
+    monkeypatch.setenv("APPTRACKER_PREFERRED_PORT", "8000")
+    monkeypatch.setenv("APPTRACKER_PORT", "8001")
+    monkeypatch.setattr(updater, "find_staged", lambda: ("9.9.9", tmp_path / "x.exe"))
+    calls: list[int] = []
+    monkeypatch.setattr(
+        updater, "restart_for_update", lambda port: calls.append(port) or True
+    )
+
+    assert client.post("/api/updates/install").status_code == 200
+    assert calls == [8000]
+
+
+def test_swap_helper_follows_the_port_file_not_a_fixed_port(tmp_path, monkeypatch):
+    """The relaunch can land on any free port; the helper must find it there."""
+    from app.config import settings as app_settings
+    from app.ports import APP_ID, port_file
+
+    staged = tmp_path / "AppTracker-9.9.9.exe"
+    staged.write_bytes(b"new")
+    monkeypatch.setattr(updater, "staging_dir", lambda: tmp_path)
+    monkeypatch.setattr(updater, "installed_exe", lambda: tmp_path / "AppTracker.exe")
+    monkeypatch.setattr(updater.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(updater.subprocess, "Popen", lambda *a, **kw: None)
+
+    assert updater.apply_staged_update(8000, staged=staged)
+    script = (tmp_path / "apply-update.ps1").read_text(encoding="utf-8")
+    assert "'--port','8000'" in script
+    assert f"$portFile = '{port_file(app_settings.data_path)}'" in script
+    assert "/api/identity" in script and f'"{APP_ID}"' in script
+    assert "127.0.0.1:8000" not in script

@@ -2,8 +2,8 @@
 Job Application Tracker — system tray launcher.
 
 Usage:
-    python launcher.py            # default port 8000
-    python launcher.py --port 9000
+    python launcher.py            # port 8000, or the next free one if busy
+    python launcher.py --port 9000  # prefer 9000 instead
 
 What it does:
   1. Builds the frontend if frontend/dist is missing.
@@ -23,8 +23,12 @@ import time
 import traceback
 import webbrowser
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import uvicorn
+
+if TYPE_CHECKING:
+    from app.instance_lock import InstanceLock
 
 logger = logging.getLogger("tracker.launcher")
 
@@ -56,6 +60,7 @@ def _data_dir() -> Path:
 LOG_DIR = _data_dir()
 LOG_FILE = LOG_DIR / "launcher.log"
 FIRST_RUN_MARKER = LOG_DIR / ".welcomed"
+INSTANCE_LOCK_FILE = LOG_DIR / "apptracker.lock"
 
 # Windows Startup entries
 _WIN_STARTUP = Path(os.environ.get("APPDATA", "")) / "Microsoft/Windows/Start Menu/Programs/Startup"
@@ -70,7 +75,7 @@ try:
     from PIL import Image, ImageDraw
     import pystray
     _TRAY_AVAILABLE = True
-except ImportError:
+except Exception:  # noqa: BLE001 - pystray raises non-ImportErrors (e.g. Xlib) without a display
     _TRAY_AVAILABLE = False
 
 
@@ -150,35 +155,78 @@ def _make_tray_icon() -> "Image.Image":
     return img
 
 
-def _health_ok(url: str, timeout_s: float = 2.0) -> bool:
-    """True when something on this port answers as AppTracker."""
+def _is_apptracker(url: str, timeout_s: float = 1.0) -> bool:
+    """True when the server at `url` identifies itself as AppTracker."""
     import json
     import urllib.request
 
+    from app.ports import APP_ID
+
     try:
-        with urllib.request.urlopen(f"{url}/api/health", timeout=timeout_s) as resp:
-            return json.loads(resp.read().decode("utf-8")).get("status") == "ok"
+        with urllib.request.urlopen(f"{url}/api/identity", timeout=timeout_s) as resp:
+            return json.loads(resp.read().decode("utf-8")).get("app") == APP_ID
     except Exception:  # noqa: BLE001
         return False
 
 
-def _port_is_taken(port: int) -> bool:
-    import socket
+def _find_running_instance(start: int) -> str | None:
+    """URL of an AppTracker already serving in the scan range, if any.
 
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.settimeout(1.0)
-        return sock.connect_ex(("127.0.0.1", port)) == 0
+    A previous launch may have fallen back past `start`, so look at every busy
+    port in the range rather than just the preferred one. Free ports are
+    skipped without any network traffic.
+    """
+    from app.ports import PORT_SCAN_SPAN, is_port_free
+
+    for port in range(start, start + PORT_SCAN_SPAN + 1):
+        if is_port_free(port):
+            continue
+        url = f"http://127.0.0.1:{port}"
+        if _is_apptracker(url):
+            return url
+    return None
 
 
-def _wait_for_health(url: str, timeout_s: float = 15.0) -> bool:
+def _wait_for_other_launch(start: int, lock: "InstanceLock", timeout_s: float) -> str | None:
+    """Wait on the launch that holds the instance lock.
+
+    Returns its URL once it serves. Returns None if it exits first (and we
+    took the lock over, see `lock.held`) or if it is still not answering
+    when the timeout runs out.
+    """
+    deadline = time.time() + timeout_s
+    while True:
+        running = _find_running_instance(start)
+        if running:
+            return running
+        if lock.acquire() or time.time() >= deadline:
+            return None
+        time.sleep(1.0)
+
+
+def _alert(title: str, message: str) -> None:
+    """Show an error even from a windowed build, which has no console."""
+    logger.error("%s: %s", title, message)
+    if platform.system() == "Windows":
+        try:
+            import ctypes
+
+            ctypes.windll.user32.MessageBoxW(None, message, title, 0x10)  # MB_ICONERROR
+        except Exception:  # noqa: BLE001 - the log line above still stands
+            pass
+
+
+def _wait_for_health(
+    url: str, timeout_s: float = 15.0, server: "_ServerThread | None" = None
+) -> bool:
+    """Wait for our server to answer. Gives up early if its thread has died."""
     deadline = time.time() + timeout_s
     while time.time() < deadline:
-        try:
-            import urllib.request
-            urllib.request.urlopen(f"{url}/api/health", timeout=1)
+        if _is_apptracker(url):
             return True
-        except Exception:
-            time.sleep(0.2)
+        if server is not None and not server.is_alive():
+            return False
+        time.sleep(0.2)
     return False
 
 
@@ -390,6 +438,55 @@ class _ServerThread(threading.Thread):
             self._server.should_exit = True
 
 
+def _write_port_file(port: int) -> None:
+    """Tell the update helper where we landed (see app.ports.port_file)."""
+    from app.ports import port_file
+
+    try:
+        port_file(LOG_DIR).write_text(str(port), encoding="ascii")
+    except OSError:
+        logger.warning("Could not record the server port in %s", port_file(LOG_DIR))
+
+
+def _start_server(start: int) -> tuple[_ServerThread | None, int | None, bool]:
+    """Start uvicorn on the first free port from `start`. Returns (server, port, healthy).
+
+    The port is chosen right before uvicorn binds. If another program still
+    grabs it in between, uvicorn exits its thread on the bind error and we move
+    on to the next free port.
+    """
+    from app.ports import PORT_SCAN_SPAN, find_free_port, is_port_free
+
+    end = start + PORT_SCAN_SPAN
+    port = find_free_port(start, end)
+    for _attempt in range(3):
+        if port is None:
+            break
+        # app.main reads this for CORS, and the updater to relaunch here.
+        os.environ["APPTRACKER_PORT"] = str(port)
+        if port != start:
+            logger.info("Port %s is busy; using port %s instead.", start, port)
+        logger.info("Starting AppTracker server on http://127.0.0.1:%s", port)
+        server = _ServerThread(port)
+        server.start()
+        healthy = _wait_for_health(f"http://127.0.0.1:{port}", timeout_s=20.0, server=server)
+        if healthy or server.is_alive() or is_port_free(port):
+            # Up, still starting, or crashed for a reason unrelated to the port.
+            if healthy:
+                _write_port_file(port)
+            return server, port, healthy
+        logger.warning("Port %s was taken before the server could bind; retrying.", port)
+        port = find_free_port(port + 1, end)
+
+    logger.error(
+        "No free port between %s and %s. Close another program or start with "
+        "--port <number>.",
+        start,
+        end,
+    )
+    return None, None, False
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -398,39 +495,62 @@ def main() -> None:
     _configure_logging()
 
     parser = argparse.ArgumentParser(description="Job Application Tracker launcher")
-    parser.add_argument("--port", type=int, default=8000, help="Port for the backend server")
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Preferred port; if it is busy the next free one (up to +100) is used",
+    )
     parser.add_argument("--no-tray", action="store_true", help="Run without a tray icon (headless)")
     args = parser.parse_args()
 
-    port = args.port
-    url = f"http://127.0.0.1:{port}"
-    # The update helper needs to relaunch us on the same port.
-    os.environ["APPTRACKER_PORT"] = str(port)
+    # The preferred port, not the one we land on, is what Start on Login and
+    # the update handoff should remember: a fallback is a one-off.
+    preferred_port = args.port
+    os.environ["APPTRACKER_PREFERRED_PORT"] = str(preferred_port)
+
+    # Only one launcher per data directory: a second one starting while the
+    # first is still building or booting would otherwise fall back to the next
+    # port and run a second server and email scheduler on the same database.
+    # Held until this process exits.
+    from app.instance_lock import InstanceLock
+
+    instance_lock = InstanceLock(INSTANCE_LOCK_FILE)
+    if not instance_lock.acquire():
+        running = _wait_for_other_launch(preferred_port, instance_lock, timeout_s=60.0)
+        if running:
+            logger.info("AppTracker is already running at %s — opening it.", running)
+            webbrowser.open(running)
+            return
+        if not instance_lock.held:
+            _alert(
+                "AppTracker is already running",
+                "Another copy of AppTracker is running but not responding. Quit it "
+                f"from its tray icon, then start AppTracker again.\n\nLog: {LOG_FILE}",
+            )
+            return
+        logger.info("The other AppTracker exited; starting normally.")
 
     # Starting twice used to die on "address already in use" and leave a tray
     # icon that reported a server it didn't own. Hand off to the live one.
-    if _port_is_taken(port):
-        if _health_ok(url):
-            logger.info("AppTracker is already running at %s — opening it.", url)
-            webbrowser.open(url)
-        else:
-            logger.error(
-                "Port %s is in use by another program. Start AppTracker on a "
-                "different port with --port, e.g. --port 8010.",
-                port,
-            )
+    # This also catches an older build that predates the instance lock.
+    running = _find_running_instance(preferred_port)
+    if running:
+        logger.info("AppTracker is already running at %s — opening it.", running)
+        webbrowser.open(running)
         return
 
-    if _apply_pending_update(port):
+    if _apply_pending_update(preferred_port):
         return
 
-    _migrate_windows_startup_if_needed(port)
+    _migrate_windows_startup_if_needed(preferred_port)
     _build_frontend()
 
-    server = _ServerThread(port)
-    server.start()
+    server, port, healthy = _start_server(preferred_port)
+    if server is None or port is None:
+        return
+    url = f"http://127.0.0.1:{port}"
 
-    healthy = _wait_for_health(url, timeout_s=20.0)
     if not healthy:
         logger.error(
             "Server did not become healthy at %s. See log: %s",
@@ -439,14 +559,17 @@ def main() -> None:
         )
         if server.error:
             logger.error("Server thread error:\n%s", server.error)
-    elif not FIRST_RUN_MARKER.exists():
+    elif not FIRST_RUN_MARKER.exists() or port != preferred_port:
         # Subsequent launches stay silent in the tray; the first one needs to
-        # show the user something happened.
+        # show the user something happened, and so does a move to a new port,
+        # or a bookmark to the old one would reach some other program.
         try:
             FIRST_RUN_MARKER.write_text("opened\n", encoding="utf-8")
         except OSError:
             pass
         webbrowser.open(url)
+
+    logger.info("AppTracker is serving on port %s: %s", port, url)
 
     if not _TRAY_AVAILABLE or args.no_tray:
         if healthy:
@@ -474,9 +597,13 @@ def main() -> None:
         if _is_startup_enabled():
             _disable_startup()
         else:
-            _enable_startup(port)
+            _enable_startup(preferred_port)
+
+    # Set when we stop the server on purpose, so the watchdog stays quiet.
+    quitting = threading.Event()
 
     def on_quit(_icon, _item) -> None:
+        quitting.set()
         server.stop()
         _icon.stop()
 
@@ -553,8 +680,30 @@ def main() -> None:
 
     def quit_for_update() -> None:
         """Shut down on the updater's behalf — only we hold the tray handle."""
+        quitting.set()
         server.stop()
         icon.stop()
+
+    def watch_server(tray: "pystray.Icon") -> None:
+        """Exit if the server dies, so the instance lock frees up for a relaunch.
+
+        Otherwise a tray icon with no server would hold the lock and every new
+        launch would wait on it and then give up.
+        """
+        tray.visible = True
+        server.join()
+        if quitting.is_set():
+            return
+        logger.error("The server stopped unexpectedly; exiting. See %s", LOG_FILE)
+        try:
+            tray.notify(
+                "The server stopped. Start AppTracker again; details are in launcher.log.",
+                "AppTracker — stopped",
+            )
+            time.sleep(5)  # let the notification show before the icon goes
+        except Exception:  # noqa: BLE001
+            pass
+        tray.stop()
 
     try:
         from app.services import updater as _updater
@@ -564,7 +713,7 @@ def main() -> None:
         logger.exception("Could not register the updater quit hook")
 
     logger.info("Tray ready. Server healthy=%s url=%s", healthy, url)
-    icon.run()
+    icon.run(setup=watch_server)
 
 
 if __name__ == "__main__":

@@ -10,7 +10,7 @@ A small Chrome/Edge (Manifest V3) extension that captures the job listing on the
 
 ## Install (load unpacked)
 
-1. Make sure the tracker backend is running (default `http://localhost:8000`).
+1. Make sure the tracker backend is running (usually `http://127.0.0.1:8000`).
 2. Open `chrome://extensions` (or `edge://extensions`).
 3. Enable **Developer mode** (top right).
 4. Click **Load unpacked** and select this `extension/` folder.
@@ -18,10 +18,16 @@ A small Chrome/Edge (Manifest V3) extension that captures the job listing on the
 
 ## Configuration
 
-If your backend runs somewhere other than `http://localhost:8000`, open the extension's **Settings** (right-click the icon -> Options, or the "Settings" link in the popup) and set the backend URL.
+You usually don't need to configure anything. The launcher uses port 8000, or the next free port up to 8100 if 8000 is busy. The extension finds the backend in this order:
+
+1. The backend URL set in **Settings** (right-click the icon -> Options, or the "Settings" link in the popup), if one is set.
+2. The last URL that worked.
+3. A probe of `127.0.0.1:8000`-`8100`, looking for the `/api/identity` endpoint that reports `"app": "apptracker"`. The extension caches the first match.
+
+Set a URL in Settings only if your backend runs outside that range or on another host.
 
 ## Notes
 
 - Requires an active AI provider configured in the tracker (Settings -> AI Providers), since capture uses the same parsing endpoint as paste-to-add.
-- The extension only talks to the backend URL you configure (declared in `host_permissions`). It sends page text there for parsing and nothing else.
+- The extension only talks to your local AppTracker backend. `host_permissions` covers `localhost` and `127.0.0.1` on any port so that detection works. It sends page text there for parsing and nothing else.
 - Firefox support: the manifest is standard MV3; minor tweaks may be needed for `about:debugging` loading.

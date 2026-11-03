@@ -30,6 +30,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from ..config import settings as app_settings
+from ..ports import APP_ID, port_file
 from ..version import GITHUB_REPO, __version__, is_newer
 
 logger = logging.getLogger("tracker.updater")
@@ -327,6 +328,7 @@ _SWAP_PS1 = r"""$ErrorActionPreference = 'Continue'
 $log    = '{log}'
 $staged = '{staged}'
 $target = '{target}'
+$portFile = '{port_file}'
 
 function Note($m) {{ Add-Content -LiteralPath $log -Value ((Get-Date -Format s) + ' ' + $m) }}
 Note "swap helper started: $staged -> $target"
@@ -347,8 +349,13 @@ for ($i = 0; $i -lt 120; $i++) {{
 
 function Healthy {{
     try {{
-        $r = Invoke-WebRequest -Uri '{health_url}' -TimeoutSec 3 -UseBasicParsing
-        return $r.StatusCode -eq 200
+        # The relaunch may land on any free port, so follow the port it
+        # records once healthy, and make sure AppTracker is what answers there.
+        if (-not (Test-Path -LiteralPath $portFile)) {{ return $false }}
+        $port = (Get-Content -LiteralPath $portFile -Raw).Trim()
+        if ($port -notmatch '^[0-9]+$') {{ return $false }}
+        $r = Invoke-WebRequest -Uri ("http://127.0.0.1:" + $port + "/api/identity") -TimeoutSec 3 -UseBasicParsing
+        return ($r.StatusCode -eq 200) -and ($r.Content -match '"app"\s*:\s*"{app_id}"')
     }} catch {{ return $false }}
 }}
 
@@ -356,6 +363,8 @@ if (-not $moved) {{
     Note "giving up; left the staged file for the next launch to retry"
 }} else {{
     Note "replaced the binary; relaunching"
+    # Anything left in the port file belongs to the build we just replaced.
+    Remove-Item -LiteralPath $portFile -Force -ErrorAction SilentlyContinue
     # Do not exit until the new instance answers. Quitting straight after
     # Start-Process lets the child die with this helper, and the old port can
     # still be held by the process we just replaced.
@@ -402,6 +411,9 @@ def _clean_env() -> dict[str, str]:
 def apply_staged_update(port: int, *, staged: Path | None = None) -> bool:
     """Spawn the helper that replaces the installed exe once we exit.
 
+    `port` is the preferred port the new instance is launched with; it may fall
+    back to another, so the helper finds it through the launcher's port file.
+
     Returns True when the helper was launched; the caller must then shut down
     promptly, because the helper is already waiting on this PID.
     """
@@ -437,7 +449,8 @@ def apply_staged_update(port: int, *, staged: Path | None = None) -> bool:
             staged=str(staged),
             target=str(target),
             launch_args=f"'--port','{port}'",
-            health_url=f"http://127.0.0.1:{port}/api/health",
+            port_file=str(port_file(app_settings.data_path)),
+            app_id=APP_ID,
         ),
         encoding="utf-8",
     )

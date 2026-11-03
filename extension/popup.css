@@ -57,6 +57,11 @@ input {
   padding: 8px;
   font-size: 13px;
 }
+.hint {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 6px;
+}
 .preview {
   margin-top: 12px;
 }

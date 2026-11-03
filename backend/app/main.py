@@ -25,6 +25,7 @@ from .api import (
 from .config import settings as app_settings
 from .db import SessionLocal, get_db, init_db
 from .models import EmailAccount
+from .ports import APP_ID, server_port
 from .scheduler import shutdown as shutdown_scheduler
 from .scheduler import start as start_scheduler
 from .services import sync_progress
@@ -62,15 +63,21 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Job Application Tracker", version=__version__, lifespan=lifespan)
 
+# The launcher may land on a port other than 8000 when it is busy.
+_port = server_port()
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         app_settings.frontend_origin,
         "http://localhost:5173",
         "http://127.0.0.1:5173",
-        "http://localhost:8000",
-        "http://127.0.0.1:8000",
+        f"http://localhost:{_port}",
+        f"http://127.0.0.1:{_port}",
     ],
+    # No extension origins: the capture extension's host_permissions already
+    # exempt it from CORS, and allowing chrome-extension://* would let every
+    # installed extension read this API.
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -84,6 +91,12 @@ app.include_router(suggestions.router)
 app.include_router(settings.router)
 app.include_router(backup.router)
 app.include_router(updates.router)
+
+
+@app.get("/api/identity")
+def identity() -> dict:
+    """Cheap fingerprint for port probing: no DB access, always the same shape."""
+    return {"app": APP_ID, "version": __version__}
 
 
 @app.get("/api/health")
