@@ -75,7 +75,7 @@ try:
     from PIL import Image, ImageDraw
     import pystray
     _TRAY_AVAILABLE = True
-except ImportError:
+except Exception:  # noqa: BLE001 - pystray raises non-ImportErrors (e.g. Xlib) without a display
     _TRAY_AVAILABLE = False
 
 
