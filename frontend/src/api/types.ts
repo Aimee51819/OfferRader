@@ -34,6 +34,13 @@ export interface DuplicateGroup {
   applications: Application[];
 }
 
+export interface DismissedDuplicate {
+  low_id: number;
+  high_id: number;
+  created_at: string;
+  applications: Application[];
+}
+
 export interface StatusEvent {
   id: number;
   from_status: ApplicationStatus | null;

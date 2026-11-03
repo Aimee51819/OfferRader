@@ -85,6 +85,82 @@ def test_same_job_id_is_flagged(client):
     assert _pairs(client) == {frozenset({a["id"], b["id"]})}
 
 
+def _dismiss(client, first_id: int, second_id: int):
+    return client.post(
+        "/api/applications/duplicates/dismiss",
+        json={"first_id": first_id, "second_id": second_id},
+    )
+
+
+def test_dismissed_pair_is_not_suggested_and_others_are(client):
+    a = _add(client, company="Cigna", title="TECDP Track A", job_id="26010470")
+    b = _add(client, company="Cigna", title="Something Else", job_id="26010470")
+    c = _add(client, company="Solace", title="Unknown")
+    d = _add(client, company="Solace", title="Associate Product Engineer")
+    assert len(_pairs(client)) == 2
+
+    assert _dismiss(client, a["id"], b["id"]).status_code == 200
+    assert _pairs(client) == {frozenset({c["id"], d["id"]})}
+
+
+def test_dismissal_is_order_independent_and_idempotent(client):
+    a = _add(client, company="Cigna", title="TECDP Track A", job_id="26010470")
+    b = _add(client, company="Cigna", title="Something Else", job_id="26010470")
+
+    first = _dismiss(client, b["id"], a["id"]).json()
+    again = _dismiss(client, a["id"], b["id"]).json()
+    assert first == again
+    assert (first["low_id"], first["high_id"]) == (min(a["id"], b["id"]), max(a["id"], b["id"]))
+
+    dismissed = client.get("/api/applications/duplicates/dismissed").json()
+    assert len(dismissed) == 1
+    # The UI names the pair from this, so both rows must come back, low first.
+    assert [a["id"] for a in dismissed[0]["applications"]] == [
+        min(a["id"], b["id"]),
+        max(a["id"], b["id"]),
+    ]
+    assert _pairs(client) == set()
+
+
+def test_restoring_a_dismissal_suggests_the_pair_again(client):
+    a = _add(client, company="Cigna", title="TECDP Track A", job_id="26010470")
+    b = _add(client, company="Cigna", title="Something Else", job_id="26010470")
+    _dismiss(client, a["id"], b["id"])
+
+    # Reversed order on purpose; restoring twice is harmless.
+    for _ in range(2):
+        res = client.delete(f"/api/applications/duplicates/dismissed/{b['id']}/{a['id']}")
+        assert res.status_code == 200
+    assert _pairs(client) == {frozenset({a["id"], b["id"]})}
+    assert client.get("/api/applications/duplicates/dismissed").json() == []
+
+
+def test_dismiss_rejects_bad_pairs(client):
+    a = _add(client, company="Cigna", title="TECDP Track A")
+    assert _dismiss(client, a["id"], a["id"]).status_code == 400
+    assert _dismiss(client, a["id"], a["id"] + 999).status_code == 404
+
+
+def test_deleting_or_merging_an_application_drops_its_dismissals(client):
+    a = _add(client, company="Cigna", title="TECDP Track A", job_id="26010470")
+    b = _add(client, company="Cigna", title="Something Else", job_id="26010470")
+    c = _add(client, company="Cigna", title="Unknown")
+    _dismiss(client, a["id"], b["id"])
+    _dismiss(client, b["id"], c["id"])
+
+    assert client.delete(f"/api/applications/{a['id']}").status_code == 200
+    remaining = client.get("/api/applications/duplicates/dismissed").json()
+    assert [(r["low_id"], r["high_id"]) for r in remaining] == [(b["id"], c["id"])]
+
+    res = client.post(
+        "/api/applications/merge",
+        json={"source_id": c["id"], "target_id": b["id"]},
+    )
+    assert res.status_code == 200
+    assert client.get("/api/applications/duplicates/dismissed").json() == []
+    assert client.get("/api/applications/duplicates").status_code == 200
+
+
 def test_merge_keeps_job_id_and_beats_ghosted(client):
     ghost = _add(
         client,

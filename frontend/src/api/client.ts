@@ -4,6 +4,7 @@ import type {
   Application,
   ApplicationDetail,
   ApplicationStatus,
+  DismissedDuplicate,
   DuplicateGroup,
   EmailAccount,
   HealthStatus,
@@ -94,6 +95,18 @@ export const api = {
   },
 
   listDuplicates: () => request<DuplicateGroup[]>("/applications/duplicates"),
+  listDismissedDuplicates: () =>
+    request<DismissedDuplicate[]>("/applications/duplicates/dismissed"),
+  dismissDuplicate: (firstId: number, secondId: number) =>
+    request<DismissedDuplicate>("/applications/duplicates/dismiss", {
+      method: "POST",
+      body: JSON.stringify({ first_id: firstId, second_id: secondId }),
+    }),
+  restoreDuplicate: (firstId: number, secondId: number) =>
+    request<{ message: string }>(
+      `/applications/duplicates/dismissed/${firstId}/${secondId}`,
+      { method: "DELETE" }
+    ),
 
   // Analytics
   getAnalytics: () => request<Analytics>("/analytics"),
