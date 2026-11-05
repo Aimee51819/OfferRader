@@ -1,0 +1,57 @@
+{
+  "name": "02_ibm_swe_ack",
+  "account": "primary",
+  "provider_message_id": "m02",
+  "thread_id": "thr-m02",
+  "internet_message_id": "<m02@mail.example>",
+  "from_name": "IBM Careers",
+  "from_address": "ibm@myworkday.example",
+  "subject": "Aimee Sun - 84377 - Software Engineer Intern (Summer 2027)",
+  "received_at": "2027-02-02T15:10:00Z",
+  "sent_at": "2027-02-02T15:10:00Z",
+  "body": "Dear Aimee,\n\nThank you for applying to IBM. We have received your application for the Software Engineer Intern (Summer 2027) position, requisition 84377.\n\nIBM Talent Acquisition",
+  "expected": {
+    "is_job_related": true,
+    "events": [
+      "application_confirmation"
+    ],
+    "company": "IBM",
+    "role": "Software Engineer Intern (Summer 2027)",
+    "requisition_id": "84377"
+  },
+  "model_output": {
+    "schema_version": "1.0",
+    "is_job_related": true,
+    "language": "en",
+    "company": {
+      "name": "IBM",
+      "domain": null,
+      "confidence": 0.95
+    },
+    "role": {
+      "title": "Software Engineer Intern (Summer 2027)",
+      "requisition_id": "84377",
+      "job_url": null,
+      "confidence": 0.9
+    },
+    "events": [
+      {
+        "type": "application_confirmation",
+        "event_time": null,
+        "event_time_raw": null,
+        "action_required": null,
+        "assessment_type": null,
+        "assessment_provider": null,
+        "action_url": null,
+        "deadline": null,
+        "evidence_quotes": [
+          "We have received your application for the Software Engineer Intern (Summer 2027) position"
+        ],
+        "confidence": 0.92
+      }
+    ],
+    "overall_confidence": 0.92,
+    "ambiguities": [],
+    "needs_review": false
+  }
+}

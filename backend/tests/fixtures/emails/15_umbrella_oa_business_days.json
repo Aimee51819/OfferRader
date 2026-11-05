@@ -1,0 +1,74 @@
+{
+  "name": "15_umbrella_oa_business_days",
+  "account": "primary",
+  "provider_message_id": "m15",
+  "thread_id": "thr-m15",
+  "internet_message_id": "<m15@mail.example>",
+  "from_name": "Umbrella Corp",
+  "from_address": "talent@umbrella.example",
+  "subject": "Umbrella: case exercise for Solutions Architect Intern",
+  "received_at": "2027-05-27T16:00:00Z",
+  "sent_at": "2027-05-27T16:00:00Z",
+  "body": "Hello Aimee,\n\nPlease submit the case exercise for the Solutions Architect Intern role within three business days.\n\nUmbrella Talent",
+  "expected": {
+    "is_job_related": true,
+    "events": [
+      "assessment_invitation"
+    ],
+    "company": "Umbrella Corp",
+    "role": "Solutions Architect Intern",
+    "deadlines": [
+      {
+        "due_at": null,
+        "due_date": "2027-06-01",
+        "precision": "day",
+        "needs_review": true
+      }
+    ]
+  },
+  "model_output": {
+    "schema_version": "1.0",
+    "is_job_related": true,
+    "language": "en",
+    "company": {
+      "name": "Umbrella Corp",
+      "domain": null,
+      "confidence": 0.95
+    },
+    "role": {
+      "title": "Solutions Architect Intern",
+      "requisition_id": null,
+      "job_url": null,
+      "confidence": 0.9
+    },
+    "events": [
+      {
+        "type": "assessment_invitation",
+        "event_time": null,
+        "event_time_raw": null,
+        "action_required": "Submit the case exercise",
+        "assessment_type": "case",
+        "assessment_provider": null,
+        "action_url": null,
+        "deadline": {
+          "raw_expression": "within three business days",
+          "kind": "business_days",
+          "anchor": "email_received_at",
+          "timezone_text": null,
+          "date_only": null,
+          "normalized_at_utc": null,
+          "precision": "unknown",
+          "assumptions": [],
+          "confidence": 0.9
+        },
+        "evidence_quotes": [
+          "Please submit the case exercise"
+        ],
+        "confidence": 0.92
+      }
+    ],
+    "overall_confidence": 0.92,
+    "ambiguities": [],
+    "needs_review": false
+  }
+}

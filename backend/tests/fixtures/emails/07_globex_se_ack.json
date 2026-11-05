@@ -1,0 +1,56 @@
+{
+  "name": "07_globex_se_ack",
+  "account": "primary",
+  "provider_message_id": "m07",
+  "thread_id": "g1",
+  "internet_message_id": "<m07@mail.example>",
+  "from_name": "Globex",
+  "from_address": "careers@globex.example",
+  "subject": "Thank you for applying to Globex",
+  "received_at": "2027-02-10T18:00:00Z",
+  "sent_at": "2027-02-10T18:00:00Z",
+  "body": "Dear Aimee,\n\nThank you for applying for the Solutions Engineer Intern position at Globex. Your application has been received.\n\nGlobex University Recruiting",
+  "expected": {
+    "is_job_related": true,
+    "events": [
+      "application_confirmation"
+    ],
+    "company": "Globex",
+    "role": "Solutions Engineer Intern"
+  },
+  "model_output": {
+    "schema_version": "1.0",
+    "is_job_related": true,
+    "language": "en",
+    "company": {
+      "name": "Globex",
+      "domain": null,
+      "confidence": 0.95
+    },
+    "role": {
+      "title": "Solutions Engineer Intern",
+      "requisition_id": null,
+      "job_url": null,
+      "confidence": 0.9
+    },
+    "events": [
+      {
+        "type": "application_confirmation",
+        "event_time": null,
+        "event_time_raw": null,
+        "action_required": null,
+        "assessment_type": null,
+        "assessment_provider": null,
+        "action_url": null,
+        "deadline": null,
+        "evidence_quotes": [
+          "Your application has been received"
+        ],
+        "confidence": 0.92
+      }
+    ],
+    "overall_confidence": 0.92,
+    "ambiguities": [],
+    "needs_review": false
+  }
+}

@@ -1,127 +1,80 @@
+"""Typed key/value settings stored in the ``settings`` table."""
 from __future__ import annotations
 
 import json
+import secrets
+from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import ApplicationStatus, Setting
+from ..config import settings as env
+from ..models import NotificationRule, Setting
 
-AUTO_APPLY_KEY = "auto_apply_suggestions"
-POLL_INTERVAL_KEY = "email_poll_interval_seconds"
-MIN_CONFIDENCE_KEY = "min_suggestion_confidence"
-FOLLOW_UP_DAYS_KEY = "follow_up_days"
-HIDDEN_BOARD_KEY = "hidden_board_statuses"
+DEFAULTS: dict[str, Any] = {
+    # review_first: every email-derived change waits for approval.
+    # auto_harmless: high-confidence, non-sensitive, unambiguous changes apply directly.
+    "auto_apply_policy": "review_first",
+    "auto_apply_min_confidence": 0.9,
+    "poll_interval_seconds": env.email_poll_interval_seconds,
+    # Automatic background sync stays off until the user runs a dry-run and enables it.
+    "auto_sync_enabled": False,
+    "initial_lookback_days": 60,
+    "display_timezone": env.display_timezone,
+    "desktop_notifications": False,
+    "ollama_model": env.ollama_model,
+    "ollama_base_url": env.ollama_base_url,
+    # Warn when no successful sync for this long (Mac asleep, scheduler stopped).
+    "missed_sync_warning_minutes": 120,
+}
 
-MIN_POLL_INTERVAL = 60
-MAX_POLL_INTERVAL = 86400
-DEFAULT_MIN_CONFIDENCE = 70
-DEFAULT_FOLLOW_UP_DAYS = 14
-DEFAULT_HIDDEN_BOARD_STATUSES = [
-    ApplicationStatus.phone_screen,
-    ApplicationStatus.rejected,
-    ApplicationStatus.ghosted,
-]
+DEFAULT_LEAD_TIMES_MIN = (72 * 60, 24 * 60, 3 * 60)
 
 
-def get_setting(db: Session, key: str, default: str | None = None) -> str | None:
+def get(db: Session, key: str) -> Any:
     row = db.get(Setting, key)
-    return row.value if row else default
-
-
-def set_setting(db: Session, key: str, value: str) -> None:
-    row = db.get(Setting, key)
-    if row:
-        row.value = value
-    else:
-        db.add(Setting(key=key, value=value))
-    db.commit()
-
-
-def get_auto_apply(db: Session) -> bool:
-    return get_setting(db, AUTO_APPLY_KEY, "false") == "true"
-
-
-def set_auto_apply(db: Session, value: bool) -> None:
-    set_setting(db, AUTO_APPLY_KEY, "true" if value else "false")
-
-
-def get_poll_interval(db: Session, default: int) -> int:
-    raw = get_setting(db, POLL_INTERVAL_KEY)
-    if raw is None:
-        return default
+    if row is None or row.value is None:
+        return DEFAULTS.get(key)
     try:
-        return int(raw)
-    except ValueError:
-        return default
-
-
-def set_poll_interval(db: Session, seconds: int) -> int:
-    seconds = max(MIN_POLL_INTERVAL, min(MAX_POLL_INTERVAL, int(seconds)))
-    set_setting(db, POLL_INTERVAL_KEY, str(seconds))
-    return seconds
-
-
-def get_min_confidence(db: Session, default: int = DEFAULT_MIN_CONFIDENCE) -> int:
-    raw = get_setting(db, MIN_CONFIDENCE_KEY)
-    if raw is None:
-        return default
-    try:
-        return max(0, min(100, int(raw)))
-    except ValueError:
-        return default
-
-
-def set_min_confidence(db: Session, value: int) -> int:
-    value = max(0, min(100, int(value)))
-    set_setting(db, MIN_CONFIDENCE_KEY, str(value))
-    return value
-
-
-def get_follow_up_days(db: Session, default: int = DEFAULT_FOLLOW_UP_DAYS) -> int:
-    raw = get_setting(db, FOLLOW_UP_DAYS_KEY)
-    if raw is None:
-        return default
-    try:
-        return max(1, min(365, int(raw)))
-    except ValueError:
-        return default
-
-
-def set_follow_up_days(db: Session, value: int) -> int:
-    value = max(1, min(365, int(value)))
-    set_setting(db, FOLLOW_UP_DAYS_KEY, str(value))
-    return value
-
-
-def _ordered_statuses(statuses: list[ApplicationStatus]) -> list[ApplicationStatus]:
-    wanted = set(statuses)
-    return [s for s in ApplicationStatus if s in wanted]
-
-
-def get_hidden_board_statuses(db: Session) -> list[ApplicationStatus]:
-    raw = get_setting(db, HIDDEN_BOARD_KEY)
-    if raw is None:
-        return list(DEFAULT_HIDDEN_BOARD_STATUSES)
-    try:
-        data = json.loads(raw)
+        return json.loads(row.value)
     except json.JSONDecodeError:
-        return list(DEFAULT_HIDDEN_BOARD_STATUSES)
-    if not isinstance(data, list):
-        return list(DEFAULT_HIDDEN_BOARD_STATUSES)
-    parsed: list[ApplicationStatus] = []
-    for item in data:
-        try:
-            parsed.append(ApplicationStatus(item))
-        except ValueError:
-            continue
-    return _ordered_statuses(parsed)
+        return row.value
 
 
-def set_hidden_board_statuses(
-    db: Session, statuses: list[ApplicationStatus]
-) -> list[ApplicationStatus]:
-    unique = _ordered_statuses(list(dict.fromkeys(statuses)))
-    if len(unique) >= len(ApplicationStatus):
-        raise ValueError("At least one status must stay visible on the board")
-    set_setting(db, HIDDEN_BOARD_KEY, json.dumps([s.value for s in unique]))
-    return unique
+def set_value(db: Session, key: str, value: Any) -> None:
+    row = db.get(Setting, key)
+    encoded = json.dumps(value)
+    if row is None:
+        db.add(Setting(key=key, value=encoded))
+    else:
+        row.value = encoded
+
+
+def all_settings(db: Session) -> dict[str, Any]:
+    return {k: get(db, k) for k in DEFAULTS}
+
+
+def integration_token(db: Session) -> str:
+    """Token for local integrations. Env wins; else generated once and stored."""
+    if env.integration_token:
+        return env.integration_token
+    from ..core.secrets import load_secret, store_secret
+
+    ref = get(db, "integration_token_ref")
+    if ref:
+        token = load_secret(db, ref)
+        if token:
+            return token
+    token = secrets.token_urlsafe(32)
+    ref = store_secret(db, "integration", token)
+    set_value(db, "integration_token_ref", ref)
+    db.commit()
+    return token
+
+
+def seed_defaults(db: Session) -> None:
+    existing = db.execute(select(NotificationRule)).scalars().first()
+    if existing is None:
+        for minutes in DEFAULT_LEAD_TIMES_MIN:
+            db.add(NotificationRule(kind="deadline", lead_time_minutes=minutes, channel="dashboard"))
+        db.commit()

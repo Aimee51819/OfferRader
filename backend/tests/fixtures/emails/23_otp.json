@@ -1,0 +1,39 @@
+{
+  "name": "23_otp",
+  "account": "primary",
+  "provider_message_id": "m23",
+  "thread_id": "thr-m23",
+  "internet_message_id": "<m23@mail.example>",
+  "from_name": "Workday",
+  "from_address": "otp@myworkday.example",
+  "subject": "Your verification code",
+  "received_at": "2027-02-01T14:00:00Z",
+  "sent_at": "2027-02-01T14:00:00Z",
+  "body": "Your verification code is 482913. This code will expire in 10 minutes.",
+  "expected": {
+    "is_job_related": false,
+    "events": [],
+    "company": null,
+    "role": null
+  },
+  "model_output": {
+    "schema_version": "1.0",
+    "is_job_related": false,
+    "language": "en",
+    "company": {
+      "name": null,
+      "domain": null,
+      "confidence": 0.0
+    },
+    "role": {
+      "title": null,
+      "requisition_id": null,
+      "job_url": null,
+      "confidence": 0.0
+    },
+    "events": [],
+    "overall_confidence": 0.92,
+    "ambiguities": [],
+    "needs_review": false
+  }
+}

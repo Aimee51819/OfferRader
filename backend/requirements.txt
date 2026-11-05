@@ -1,14 +1,17 @@
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
 sqlalchemy==2.0.36
+alembic==1.14.0
 pydantic==2.10.4
 pydantic-settings==2.7.1
-litellm==1.55.9
+httpx==0.28.1
 apscheduler==3.11.0
 cryptography==44.0.0
 python-dotenv==1.0.1
 beautifulsoup4==4.12.3
-email-validator==2.2.0
 python-multipart==0.0.20
+# Tray launcher (optional on servers)
 pystray==0.19.5
 Pillow==11.1.0
+# Optional: store the encryption key in the macOS Keychain
+keyring==25.5.0

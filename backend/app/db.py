@@ -1,11 +1,18 @@
+"""Engine, sessions, and schema migration (Alembic) for the local SQLite store."""
 from __future__ import annotations
 
+import logging
+import sqlite3
 from collections.abc import Generator
+from datetime import datetime, timezone
+from pathlib import Path
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, inspect
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from .config import settings
+
+logger = logging.getLogger("tracker.db")
 
 engine = create_engine(
     settings.db_url,
@@ -16,10 +23,11 @@ engine = create_engine(
 
 @event.listens_for(engine, "connect")
 def _set_sqlite_pragma(dbapi_connection, _connection_record) -> None:
-    """WAL so background email sync doesn't freeze the API/UI."""
+    """WAL so background sync never blocks the UI; enforce foreign keys."""
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
     cursor.execute("PRAGMA busy_timeout=30000")
+    cursor.execute("PRAGMA foreign_keys=ON")
     cursor.close()
 
 
@@ -38,41 +46,71 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
+_BACKEND_DIR = Path(__file__).resolve().parent.parent
+
+
+def _alembic_config():
+    from alembic.config import Config
+
+    cfg = Config(str(_BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(_BACKEND_DIR / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", settings.db_url)
+    return cfg
+
+
+def _current_and_head() -> tuple[str | None, str | None]:
+    from alembic.runtime.migration import MigrationContext
+    from alembic.script import ScriptDirectory
+
+    head = ScriptDirectory.from_config(_alembic_config()).get_current_head()
+    with engine.connect() as conn:
+        current = MigrationContext.configure(conn).get_current_revision()
+    return current, head
+
+
+def backup_database(label: str) -> Path | None:
+    """Consistent SQLite copy into DATA_DIR/backups (works with WAL)."""
+    db_file = settings.data_path / "tracker.db"
+    if not db_file.exists() or db_file.stat().st_size == 0:
+        return None
+    target_dir = settings.data_path / "backups"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    target = target_dir / f"{label}-{stamp}.db"
+    src = sqlite3.connect(str(db_file))
+    try:
+        dst = sqlite3.connect(str(target))
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+    finally:
+        src.close()
+    return target
+
+
 def init_db() -> None:
-    # Import models so they are registered on the metadata before create_all.
-    from . import models  # noqa: F401
+    """Bring the database to the latest schema. Backs up first if anything will change."""
+    from alembic import command
 
-    Base.metadata.create_all(bind=engine)
-    _migrate_sqlite_columns()
-    _run_data_backfills()
+    from . import models  # noqa: F401 - register metadata
 
-
-def _migrate_sqlite_columns() -> None:
-    """Add columns introduced after initial create_all (SQLite has no ALTER via ORM)."""
-    if not settings.db_url.startswith("sqlite"):
-        return
-    with engine.begin() as conn:
-        rows = conn.exec_driver_sql("PRAGMA table_info(applications)").fetchall()
-        cols = {r[1] for r in rows}
-        if "job_id" not in cols:
-            conn.exec_driver_sql(
-                "ALTER TABLE applications ADD COLUMN job_id VARCHAR(128)"
-            )
-
-        rows = conn.exec_driver_sql("PRAGMA table_info(suggestions)").fetchall()
-        cols = {r[1] for r in rows}
-        if "email_date" not in cols:
-            conn.exec_driver_sql(
-                "ALTER TABLE suggestions ADD COLUMN email_date DATETIME"
-            )
+    current, head = _current_and_head()
+    if current != head:
+        has_tables = bool(inspect(engine).get_table_names())
+        if has_tables:
+            path = backup_database(f"pre-migrate-{current or 'legacy'}")
+            if path:
+                logger.info("Backed up database to %s before migrating", path)
+        command.upgrade(_alembic_config(), "head")
+    _seed_defaults()
 
 
-def _run_data_backfills() -> None:
-    """Idempotent row updates that run once after schema migrations."""
-    from .services.oa_backfill import run_online_assessment_backfill
+def _seed_defaults() -> None:
+    from .services.settings_service import seed_defaults
 
     db = SessionLocal()
     try:
-        run_online_assessment_backfill(db)
+        seed_defaults(db)
     finally:
         db.close()

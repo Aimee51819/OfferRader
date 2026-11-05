@@ -34,19 +34,8 @@ datas = [(str(FRONTEND_DIST), "frontend/dist")]
 if ICON.exists():
     datas.append((str(ICON), "assets"))
 
-# litellm reads model_prices_and_context_window_backup.json at import. Without
-# it the packaged app re-downloads the pricing map from GitHub on every call,
-# which turns a network hiccup into a stalled inbox sync.
-datas += collect_data_files("litellm")
-
-# tiktoken resolves its encodings through importlib at runtime, so PyInstaller
-# cannot see tiktoken_ext.openai_public or tiktoken.load by static analysis.
-# Missing them makes `import litellm` fail in the packaged app only.
-tiktoken_imports = (
-    collect_submodules("tiktoken")
-    + collect_submodules("tiktoken_ext")
-    + ["tiktoken_ext.openai_public", "tiktoken.load", "tiktoken.registry"]
-)
+# Alembic migrations are loaded from disk at startup.
+datas += [(str(BACKEND / "alembic"), "alembic"), (str(BACKEND / "alembic.ini"), ".")]
 
 a = Analysis(
     [str(BACKEND / "launcher.py")],
@@ -66,15 +55,15 @@ a = Analysis(
         "uvicorn.lifespan.on",
         "app.main",
         "app.api.applications",
-        "app.api.analytics",
         "app.api.backup",
-        "app.api.emails",
-        "app.api.parse",
         "app.api.settings",
-        "app.api.suggestions",
         "app.api.updates",
+        "app.api.dashboard",
+        "app.api.reviews",
+        "app.api.mail",
+        "app.api.io",
+        "app.api.integrations",
         "app.services.updater",
-        *tiktoken_imports,
     ],
     hookspath=[],
     hooksconfig={},

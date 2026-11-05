@@ -1,0 +1,56 @@
+{
+  "name": "11_initech_tpm_ack",
+  "account": "primary",
+  "provider_message_id": "m11",
+  "thread_id": "thr-m11",
+  "internet_message_id": "<m11@mail.example>",
+  "from_name": "Initech",
+  "from_address": "jobs@initech.example",
+  "subject": "Application received - Technical Program Manager Intern",
+  "received_at": "2027-03-01T15:00:00Z",
+  "sent_at": "2027-03-01T15:00:00Z",
+  "body": "Hi Aimee,\n\nWe received your application for the Technical Program Manager Intern position at Initech. Thank you for your interest.\n\nInitech Recruiting",
+  "expected": {
+    "is_job_related": true,
+    "events": [
+      "application_received"
+    ],
+    "company": "Initech",
+    "role": "Technical Program Manager Intern"
+  },
+  "model_output": {
+    "schema_version": "1.0",
+    "is_job_related": true,
+    "language": "en",
+    "company": {
+      "name": "Initech",
+      "domain": null,
+      "confidence": 0.95
+    },
+    "role": {
+      "title": "Technical Program Manager Intern",
+      "requisition_id": null,
+      "job_url": null,
+      "confidence": 0.9
+    },
+    "events": [
+      {
+        "type": "application_received",
+        "event_time": null,
+        "event_time_raw": null,
+        "action_required": null,
+        "assessment_type": null,
+        "assessment_provider": null,
+        "action_url": null,
+        "deadline": null,
+        "evidence_quotes": [
+          "We received your application"
+        ],
+        "confidence": 0.92
+      }
+    ],
+    "overall_confidence": 0.92,
+    "ambiguities": [],
+    "needs_review": false
+  }
+}

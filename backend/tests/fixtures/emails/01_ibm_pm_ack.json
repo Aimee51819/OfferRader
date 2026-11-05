@@ -1,0 +1,57 @@
+{
+  "name": "01_ibm_pm_ack",
+  "account": "primary",
+  "provider_message_id": "m01",
+  "thread_id": "thr-m01",
+  "internet_message_id": "<m01@mail.example>",
+  "from_name": "IBM Careers",
+  "from_address": "ibm@myworkday.example",
+  "subject": "Aimee Sun - 84211 - Product Manager Intern (Summer 2027)",
+  "received_at": "2027-02-01T14:05:00Z",
+  "sent_at": "2027-02-01T14:05:00Z",
+  "body": "Dear Aimee,\n\nThank you for applying to IBM. We have received your application for the Product Manager Intern (Summer 2027) position, requisition 84211.\n\nOur team will review your qualifications.\n\nIBM Talent Acquisition",
+  "expected": {
+    "is_job_related": true,
+    "events": [
+      "application_confirmation"
+    ],
+    "company": "IBM",
+    "role": "Product Manager Intern (Summer 2027)",
+    "requisition_id": "84211"
+  },
+  "model_output": {
+    "schema_version": "1.0",
+    "is_job_related": true,
+    "language": "en",
+    "company": {
+      "name": "IBM",
+      "domain": null,
+      "confidence": 0.95
+    },
+    "role": {
+      "title": "Product Manager Intern (Summer 2027)",
+      "requisition_id": "84211",
+      "job_url": null,
+      "confidence": 0.9
+    },
+    "events": [
+      {
+        "type": "application_confirmation",
+        "event_time": null,
+        "event_time_raw": null,
+        "action_required": null,
+        "assessment_type": null,
+        "assessment_provider": null,
+        "action_url": null,
+        "deadline": null,
+        "evidence_quotes": [
+          "We have received your application for the Product Manager Intern (Summer 2027) position"
+        ],
+        "confidence": 0.92
+      }
+    ],
+    "overall_confidence": 0.92,
+    "ambiguities": [],
+    "needs_review": false
+  }
+}

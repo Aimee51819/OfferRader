@@ -1,630 +1,399 @@
+"""Applications, postings, resumes, companies, duplicate preflight, action items."""
 from __future__ import annotations
 
-import csv
-import io
-import json
-import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from fastapi.responses import Response
-from sqlalchemy import delete, or_, select
-from sqlalchemy.exc import IntegrityError
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
+from ..domain.duplicates import check_duplicate
+from ..domain.normalize import canonical_url, detect_ats, normalize_company, normalize_req_id, normalize_title
+from ..domain.resolver import get_or_create_company
 from ..models import (
+    ActionItem,
     Application,
-    ApplicationStatus,
-    DismissedDuplicate,
-    EventSource,
-    ProcessedEmail,
-    StatusEvent,
-    Suggestion,
+    ApplicationEvent,
+    Assessment,
+    Company,
+    CompanyAlias,
+    JobPosting,
+    ResumeVersion,
+    utcnow,
 )
 from ..schemas import (
+    ActionItemEdit,
+    ActionItemOut,
+    AliasIn,
+    AliasOut,
     ApplicationCreate,
     ApplicationDetailOut,
     ApplicationOut,
     ApplicationUpdate,
-    DismissedDuplicateOut,
-    DuplicateGroupOut,
-    DuplicatePairIn,
-    EmailActivityOut,
-    MergeApplicationsIn,
-    MessageOut,
-    StatusEventOut,
+    CompanyOut,
+    DuplicateCheckIn,
+    DuplicateCheckOut,
+    EventOut,
+    PostingIn,
+    PostingOut,
+    ResumeIn,
+    ResumeOut,
+    StageUpdate,
 )
-from ..services.settings_service import get_follow_up_days
-from ..services.suggestion_service import is_placeholder_title, normalize_label
+from ..services.applications_service import (
+    DuplicateBlocked,
+    action_out,
+    application_detail,
+    application_out,
+    create_application,
+    mark_submitted,
+    set_stage,
+)
+from ..services.pipeline.apply import audit
+from .deps import not_found
 
-router = APIRouter(prefix="/api/applications", tags=["applications"])
-
-EXPORT_FIELDS = [
-    "company",
-    "title",
-    "location",
-    "url",
-    "source",
-    "salary",
-    "status",
-    "skills",
-    "notes",
-    "contact_email",
-    "date_applied",
-    "description",
-]
+router = APIRouter(prefix="/api", tags=["applications"])
 
 
-@router.get("", response_model=list[ApplicationOut])
+@router.get("/applications", response_model=list[ApplicationOut])
 def list_applications(
-    status: ApplicationStatus | None = None,
-    search: str | None = Query(None),
+    q: str | None = None,
+    company: str | None = None,
+    role: str | None = None,
+    category: str | None = None,
+    stage: list[str] | None = Query(None),
+    source: str | None = None,
+    resume_version_id: str | None = None,
+    submitted_from: date | None = None,
+    submitted_to: date | None = None,
+    urgency_filter: str | None = Query(None, alias="urgency"),
+    needs_review: bool | None = None,
+    verified: bool | None = None,
     db: Session = Depends(get_db),
-) -> list[Application]:
-    stmt = select(Application)
-    if status is not None:
-        stmt = stmt.where(Application.status == status)
-    if search:
-        like = f"%{search}%"
+) -> list[dict]:
+    stmt = select(Application).join(Company)
+    if q:
+        like = f"%{q}%"
         stmt = stmt.where(
             or_(
-                Application.company.ilike(like),
-                Application.title.ilike(like),
-                Application.location.ilike(like),
+                Company.canonical_name.ilike(like),
+                Application.role_title.ilike(like),
+                Application.external_job_id.ilike(like),
+                Application.notes.ilike(like),
             )
         )
-    stmt = stmt.order_by(Application.updated_at.desc())
-    return list(db.execute(stmt).scalars().all())
-
-
-@router.post("", response_model=ApplicationOut, status_code=201)
-def create_application(
-    payload: ApplicationCreate, db: Session = Depends(get_db)
-) -> Application:
-    app = Application(**payload.model_dump())
-    db.add(app)
-    db.flush()
-    db.add(
-        StatusEvent(
-            application_id=app.id,
-            from_status=None,
-            to_status=app.status,
-            note="Application created",
-            source=EventSource.manual,
-        )
-    )
-    db.commit()
-    db.refresh(app)
-    return app
-
-
-@router.get("/export")
-def export_applications(
-    format: str = Query("csv", pattern="^(csv|json)$"),
-    db: Session = Depends(get_db),
-) -> Response:
-    apps = db.execute(
-        select(Application).order_by(Application.created_at.asc())
-    ).scalars().all()
-
-    def _value(app: Application, field: str) -> str:
-        val = getattr(app, field)
-        if isinstance(val, ApplicationStatus):
-            return val.value
-        if isinstance(val, datetime):
-            return val.isoformat()
-        return "" if val is None else str(val)
-
-    stamp = datetime.now().strftime("%Y%m%d")
-    if format == "json":
-        payload = [{f: _value(a, f) for f in EXPORT_FIELDS} for a in apps]
-        return Response(
-            content=json.dumps(payload, indent=2),
-            media_type="application/json",
-            headers={
-                "Content-Disposition": f"attachment; filename=applications-{stamp}.json"
-            },
-        )
-
-    buffer = io.StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=EXPORT_FIELDS)
-    writer.writeheader()
-    for a in apps:
-        writer.writerow({f: _value(a, f) for f in EXPORT_FIELDS})
-    return Response(
-        content=buffer.getvalue(),
-        media_type="text/csv",
-        headers={
-            "Content-Disposition": f"attachment; filename=applications-{stamp}.csv"
-        },
-    )
-
-
-def _coerce_status(value: str | None) -> ApplicationStatus:
-    if not value:
-        return ApplicationStatus.saved
-    try:
-        return ApplicationStatus(value.strip().lower())
-    except ValueError:
-        return ApplicationStatus.saved
-
-
-def _coerce_date(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    for parse in (datetime.fromisoformat,):
-        try:
-            return parse(value)
-        except ValueError:
-            continue
-    return None
-
-
-_FOLLOW_UP_STATUSES = {
-    ApplicationStatus.applied,
-    ApplicationStatus.online_assessment,
-    ApplicationStatus.phone_screen,
-    ApplicationStatus.interview,
-}
-
-
-def _normalize_company(text: str) -> str:
-    text = text.lower()
-    text = re.sub(r"[^a-z0-9 ]", "", text)
-    return re.sub(r"\s+", " ", text).strip()
-
-
-# Too generic to safely substring-match against all inbox subjects.
-_GENERIC_COMPANY_MATCH = {
-    "entry",
-    "level",
-    "software",
-    "engineer",
-    "intern",
-    "new",
-    "grad",
-    "team",
-    "careers",
-    "jobs",
-    "hr",
-    "talent",
-}
-
-
-def _related_emails(db: Session, app: Application) -> list[EmailActivityOut]:
-    items: list[EmailActivityOut] = []
-    suggestions = db.execute(
-        select(Suggestion)
-        .where(Suggestion.application_id == app.id)
-        .order_by(Suggestion.created_at.desc())
-    ).scalars().all()
-    for s in suggestions:
-        items.append(
-            EmailActivityOut(
-                id=s.id,
-                kind="suggestion",
-                subject=s.email_subject,
-                sender=s.email_sender,
-                snippet=s.email_snippet,
-                summary=s.summary,
-                suggestion_status=s.status,
-                is_job_related=True,
-                created_at=s.created_at,
-            )
-        )
-
-    # Fuzzy inbox match only for distinctive company names (never "Entry").
-    norm = _normalize_company(app.company or "")
-    if norm and len(norm) >= 5 and norm not in _GENERIC_COMPANY_MATCH:
-        recent = db.execute(
-            select(ProcessedEmail)
-            .where(ProcessedEmail.is_job_related.is_(True))
-            .order_by(ProcessedEmail.created_at.desc())
-            .limit(200)
-        ).scalars().all()
-        seen_subjects = {
-            (i.subject or "").strip().lower() for i in items if i.subject
-        }
-        # Prefer whole-token match so "entry" doesn't hit "entry-level" spam.
-        token = re.compile(rf"\b{re.escape(norm)}\b", re.IGNORECASE)
-        for pe in recent:
-            blob = f"{pe.subject or ''} {pe.sender or ''}"
-            if not token.search(_normalize_company(blob)) and not token.search(blob):
-                continue
-            key = (pe.subject or "").strip().lower()
-            if key and key in seen_subjects:
-                continue
-            items.append(
-                EmailActivityOut(
-                    id=pe.id,
-                    kind="processed_email",
-                    subject=pe.subject,
-                    sender=pe.sender,
-                    snippet=None,
-                    summary=None,
-                    suggestion_status=None,
-                    is_job_related=pe.is_job_related,
-                    created_at=pe.created_at,
-                )
-            )
-            if key:
-                seen_subjects.add(key)
-
-    items.sort(key=lambda x: x.created_at, reverse=True)
-    return items[:40]
-
-
-def _detail_out(db: Session, app: Application) -> ApplicationDetailOut:
-    return ApplicationDetailOut(
-        id=app.id,
-        company=app.company,
-        title=app.title,
-        location=app.location,
-        url=app.url,
-        source=app.source,
-        salary=app.salary,
-        status=app.status,
-        description=app.description,
-        skills=app.skills,
-        notes=app.notes,
-        contact_email=app.contact_email,
-        job_id=app.job_id,
-        date_applied=app.date_applied,
-        created_at=app.created_at,
-        updated_at=app.updated_at,
-        events=[StatusEventOut.model_validate(e) for e in (app.events or [])],
-        related_emails=_related_emails(db, app),
-    )
-
-
-@router.get("/reminders", response_model=list[ApplicationOut])
-def list_follow_up_reminders(db: Session = Depends(get_db)) -> list[Application]:
-    """Applications awaiting a reply longer than the configured follow-up window."""
-    days = get_follow_up_days(db)
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-    apps = db.execute(
-        select(Application)
-        .where(Application.status.in_(_FOLLOW_UP_STATUSES))
-        .order_by(Application.updated_at.asc())
-    ).scalars().all()
-    due: list[Application] = []
-    for app in apps:
-        updated = app.updated_at
-        if updated is None:
-            continue
-        if updated.tzinfo is None:
-            updated = updated.replace(tzinfo=timezone.utc)
-        if updated <= cutoff:
-            due.append(app)
-    return due
-
-
-def _title_overlap(a: str, b: str) -> float:
-    """Jaccard overlap of title words, after stripping boilerplate."""
-    ta = {w for w in normalize_label(a).split() if len(w) > 1}
-    tb = {w for w in normalize_label(b).split() if len(w) > 1}
-    if not ta or not tb:
-        return 0.0
-    return len(ta & tb) / len(ta | tb)
-
-
-@router.get("/duplicates", response_model=list[DuplicateGroupOut])
-def list_duplicate_candidates(db: Session = Depends(get_db)) -> list[DuplicateGroupOut]:
-    """Applications that look like one posting recorded twice.
-
-    Deliberately conservative: several genuinely different reqs at the same
-    employer are normal, so rows whose job ids disagree are never paired, and
-    titles must overlap heavily to be suggested.
-    """
-    apps = list(db.execute(select(Application)).scalars().all())
-    dismissed = {
-        (low, high)
-        for low, high in db.execute(
-            select(DismissedDuplicate.low_id, DismissedDuplicate.high_id)
-        ).all()
-    }
-    by_company: dict[str, list[Application]] = {}
-    for app in apps:
-        key = normalize_label(app.company)
-        if key:
-            by_company.setdefault(key, []).append(app)
-
-    groups: list[DuplicateGroupOut] = []
-    for company_apps in by_company.values():
-        if len(company_apps) < 2:
-            continue
-        for i, first in enumerate(company_apps):
-            for second in company_apps[i + 1 :]:
-                if _pair_key(first.id, second.id) in dismissed:
-                    continue  # user said these are genuinely different
-                jid_a = (first.job_id or "").strip()
-                jid_b = (second.job_id or "").strip()
-                if jid_a and jid_b and jid_a != jid_b:
-                    continue  # different requisitions at the same employer
-                if jid_a and jid_b and jid_a == jid_b:
-                    reason = f"Same job id {jid_a}"
-                elif is_placeholder_title(first.title) or is_placeholder_title(
-                    second.title
-                ):
-                    reason = "One row has no role title yet"
-                elif _title_overlap(first.title, second.title) >= 0.7:
-                    reason = "Nearly identical role titles"
-                else:
-                    continue
-                groups.append(
-                    DuplicateGroupOut(
-                        company=first.company,
-                        reason=reason,
-                        applications=[
-                            ApplicationOut.model_validate(first),
-                            ApplicationOut.model_validate(second),
-                        ],
-                    )
-                )
-    return groups
-
-
-def _pair_key(a: int, b: int) -> tuple[int, int]:
-    return (a, b) if a < b else (b, a)
-
-
-def _forget_dismissals(db: Session, app_id: int) -> None:
-    """Drop dismissals naming an application that is about to disappear.
-
-    SQLite reuses the highest rowid after a delete, so a stale row could
-    otherwise silently hide a future, unrelated pair.
-    """
-    db.execute(
-        delete(DismissedDuplicate).where(
-            or_(DismissedDuplicate.low_id == app_id, DismissedDuplicate.high_id == app_id)
-        )
-    )
-
-
-@router.get("/duplicates/dismissed", response_model=list[DismissedDuplicateOut])
-def list_dismissed_duplicates(db: Session = Depends(get_db)) -> list[DismissedDuplicateOut]:
-    rows = db.execute(
-        select(DismissedDuplicate).order_by(
-            DismissedDuplicate.created_at.desc(), DismissedDuplicate.id.desc()
-        )
-    ).scalars().all()
-    ids = {i for r in rows for i in (r.low_id, r.high_id)}
-    apps = {
-        a.id: a
-        for a in db.execute(select(Application).where(Application.id.in_(ids))).scalars()
-    }
-    out: list[DismissedDuplicateOut] = []
-    for r in rows:
-        low, high = apps.get(r.low_id), apps.get(r.high_id)
-        if low is None or high is None:
-            continue  # orphaned row; never surface a pair we can't name
-        out.append(
-            DismissedDuplicateOut(
-                low_id=r.low_id,
-                high_id=r.high_id,
-                created_at=r.created_at,
-                applications=[
-                    ApplicationOut.model_validate(low),
-                    ApplicationOut.model_validate(high),
-                ],
-            )
-        )
+    if company:
+        stmt = stmt.where(Company.canonical_name.ilike(f"%{company}%"))
+    if role:
+        stmt = stmt.where(Application.role_title.ilike(f"%{role}%"))
+    if category:
+        stmt = stmt.where(Application.category == category)
+    if stage:
+        stmt = stmt.where(Application.stage.in_(stage))
+    if resume_version_id:
+        stmt = stmt.where(Application.resume_version_id == resume_version_id)
+    if submitted_from:
+        stmt = stmt.where(Application.submitted_at >= datetime.combine(submitted_from, datetime.min.time(), timezone.utc))
+    if submitted_to:
+        stmt = stmt.where(Application.submitted_at <= datetime.combine(submitted_to, datetime.max.time(), timezone.utc))
+    apps = db.execute(stmt.order_by(Application.updated_at.desc())).scalars().all()
+    out = [application_out(db, a) for a in apps]
+    if source:
+        out = [o for o in out if o["source"] == source]
+    if verified is not None:
+        out = [o for o in out if o["verified"] == verified]
+    if needs_review is not None:
+        out = [o for o in out if (o["pending_reviews"] > 0) == needs_review]
+    if urgency_filter:
+        out = [o for o in out if o["next_action"] and o["next_action"]["urgency"] == urgency_filter]
     return out
 
 
-@router.post("/duplicates/dismiss", response_model=DismissedDuplicateOut)
-def dismiss_duplicate(
-    payload: DuplicatePairIn, db: Session = Depends(get_db)
-) -> DismissedDuplicate:
-    """Stop suggesting this pair. Idempotent and order-independent."""
-    if payload.first_id == payload.second_id:
-        raise HTTPException(status_code=400, detail="A pair needs two different applications")
-    low, high = _pair_key(payload.first_id, payload.second_id)
-    if db.get(Application, low) is None or db.get(Application, high) is None:
-        raise HTTPException(status_code=404, detail="Application not found")
+@router.post("/applications", response_model=ApplicationOut, status_code=201)
+def create(body: ApplicationCreate, db: Session = Depends(get_db)) -> dict:
+    submitted_at = body.submitted_at if body.confirmed_submitted else None
+    if body.confirmed_submitted and submitted_at is None:
+        submitted_at = utcnow()
+    stage = body.stage
+    if submitted_at and stage in {"tracked", "ready"}:
+        stage = "submitted"
+    if not body.confirmed_submitted and stage not in {"tracked", "ready"}:
+        # A stage past "ready" without confirmed submission would be an unverified assertion.
+        raise HTTPException(422, "Set confirmed_submitted=true (you really applied) to use a stage past 'ready'.")
+    try:
+        app, _check = create_application(
+            db,
+            company=body.company,
+            role_title=body.role_title,
+            external_job_id=body.external_job_id,
+            posting_url=body.posting_url,
+            recruiting_cycle=body.recruiting_cycle,
+            category=body.category,
+            location=body.location,
+            application_channel=body.application_channel,
+            resume_version_id=body.resume_version_id,
+            stage=stage,
+            submitted_at=submitted_at,
+            submission_evidence_type="manual_confirmed" if submitted_at else None,
+            notes=body.notes,
+            override_duplicate=body.override_duplicate,
+            override_reason=body.override_reason,
+            source="manual",
+        )
+    except DuplicateBlocked as exc:
+        db.rollback()
+        raise HTTPException(409, {"message": "Duplicate application blocked", "duplicate_check": exc.check.as_dict()})
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(422, str(exc))
+    db.commit()
+    return application_out(db, app)
 
-    stmt = select(DismissedDuplicate).where(
-        DismissedDuplicate.low_id == low, DismissedDuplicate.high_id == high
-    )
-    existing = db.execute(stmt).scalar_one_or_none()
-    if existing is not None:
-        return existing
-    row = DismissedDuplicate(low_id=low, high_id=high)
+
+@router.get("/applications/{app_id}", response_model=ApplicationDetailOut)
+def get_application(app_id: str, db: Session = Depends(get_db)) -> dict:
+    app = db.get(Application, app_id)
+    if app is None:
+        raise not_found("application not found")
+    return application_detail(db, app)
+
+
+@router.patch("/applications/{app_id}", response_model=ApplicationOut)
+def update_application(app_id: str, body: ApplicationUpdate, db: Session = Depends(get_db)) -> dict:
+    app = db.get(Application, app_id)
+    if app is None:
+        raise not_found("application not found")
+    changes = body.model_dump(exclude_unset=True)
+    confirmed = changes.pop("confirmed_submitted", None)
+    submitted_at = changes.pop("submitted_at", None)
+    if "role_title" in changes:
+        app.normalized_role_title = normalize_title(changes["role_title"])
+    if "external_job_id" in changes:
+        changes["external_job_id"] = normalize_req_id(changes["external_job_id"])
+    if "posting_url" in changes:
+        app.canonical_posting_url = canonical_url(changes["posting_url"])
+        app.ats_platform = detect_ats(changes["posting_url"]) or app.ats_platform
+    if changes.get("resume_version_id") and db.get(ResumeVersion, changes["resume_version_id"]) is None:
+        raise HTTPException(422, "resume_version_id not found")
+    before = {k: getattr(app, k) for k in changes}
+    for k, v in changes.items():
+        setattr(app, k, v)
+    if changes:
+        audit(
+            db,
+            application_id=app.id,
+            event_type="manual_edit",
+            description="Edited: " + ", ".join(f"{k}: {before[k]!r} -> {v!r}" for k, v in changes.items())[:900],
+            key=f"edit:{app.id}:{utcnow().isoformat()}",
+        )
+    if confirmed:
+        mark_submitted(db, app, submitted_at=submitted_at or utcnow(), evidence="manual_confirmed")
+    db.commit()
+    return application_out(db, app)
+
+
+@router.post("/applications/{app_id}/stage", response_model=ApplicationOut)
+def update_stage(app_id: str, body: StageUpdate, db: Session = Depends(get_db)) -> dict:
+    app = db.get(Application, app_id)
+    if app is None:
+        raise not_found("application not found")
+    set_stage(db, app, body.stage, note=body.note, lock=body.lock, event_at=body.event_at)
+    db.commit()
+    return application_out(db, app)
+
+
+@router.post("/applications/{app_id}/notes", response_model=ApplicationOut)
+def add_note(app_id: str, body: dict, db: Session = Depends(get_db)) -> dict:
+    app = db.get(Application, app_id)
+    if app is None:
+        raise not_found("application not found")
+    text = str(body.get("note") or "").strip()[:2000]
+    if not text:
+        raise HTTPException(422, "note is required")
+    app.notes = ((app.notes + "\n\n") if app.notes else "") + text
+    audit(db, application_id=app.id, event_type="note", description=text, key=f"note:{app.id}:{utcnow().isoformat()}")
+    db.commit()
+    return application_out(db, app)
+
+
+@router.get("/applications/{app_id}/events", response_model=list[EventOut])
+def application_events(app_id: str, db: Session = Depends(get_db)) -> list:
+    return db.execute(
+        select(ApplicationEvent).where(ApplicationEvent.application_id == app_id).order_by(ApplicationEvent.event_at.desc())
+    ).scalars().all()
+
+
+@router.get("/events", response_model=list[EventOut])
+def recent_events(since: datetime | None = None, limit: int = Query(100, le=500), db: Session = Depends(get_db)) -> list:
+    stmt = select(ApplicationEvent).order_by(ApplicationEvent.recorded_at.desc()).limit(limit)
+    if since:
+        stmt = stmt.where(ApplicationEvent.recorded_at >= since)
+    return db.execute(stmt).scalars().all()
+
+
+# --- duplicates -------------------------------------------------------------------------
+
+
+@router.post("/duplicates/check", response_model=DuplicateCheckOut)
+def duplicate_check(body: DuplicateCheckIn, db: Session = Depends(get_db)) -> dict:
+    return check_duplicate(
+        db,
+        company_name=body.company,
+        role_title=body.role_title,
+        external_job_id=body.external_job_id,
+        posting_url=body.posting_url,
+        recruiting_cycle=body.recruiting_cycle,
+    ).as_dict()
+
+
+# --- companies / aliases ------------------------------------------------------------------
+
+
+@router.get("/companies", response_model=list[CompanyOut])
+def companies(db: Session = Depends(get_db)) -> list:
+    return db.execute(select(Company).order_by(Company.canonical_name)).scalars().all()
+
+
+@router.get("/companies/{company_id}/aliases", response_model=list[AliasOut])
+def aliases(company_id: str, db: Session = Depends(get_db)) -> list:
+    return db.execute(select(CompanyAlias).where(CompanyAlias.company_id == company_id)).scalars().all()
+
+
+@router.post("/companies/{company_id}/aliases", response_model=AliasOut, status_code=201)
+def add_alias(company_id: str, body: AliasIn, db: Session = Depends(get_db)) -> CompanyAlias:
+    if db.get(Company, company_id) is None:
+        raise not_found("company not found")
+    norm = body.alias.strip().lower() if body.alias_type == "domain" else normalize_company(body.alias)
+    if body.alias_type == "domain":
+        from ..domain.normalize import is_shared_sender_domain
+
+        if is_shared_sender_domain(norm):
+            raise HTTPException(422, "That domain is shared by many employers (ATS/job board) and can't be an alias.")
+    row = CompanyAlias(company_id=company_id, alias=body.alias.strip(), normalized_alias=norm,
+                       alias_type=body.alias_type, verified=body.verified)
     db.add(row)
     try:
         db.commit()
-    except IntegrityError:
-        # A concurrent request inserted the same pair first.
+    except Exception:  # noqa: BLE001
         db.rollback()
-        return db.execute(stmt).scalar_one()
-    db.refresh(row)
+        raise HTTPException(409, "alias already exists")
     return row
 
 
-@router.delete("/duplicates/dismissed/{first_id}/{second_id}", response_model=MessageOut)
-def restore_duplicate(
-    first_id: int, second_id: int, db: Session = Depends(get_db)
-) -> MessageOut:
-    """Undo a dismissal so the pair can be suggested again. Idempotent."""
-    low, high = _pair_key(first_id, second_id)
-    db.execute(
-        delete(DismissedDuplicate).where(
-            DismissedDuplicate.low_id == low, DismissedDuplicate.high_id == high
-        )
+# --- postings / resumes -------------------------------------------------------------------
+
+
+@router.get("/postings", response_model=list[PostingOut])
+def postings(db: Session = Depends(get_db)) -> list:
+    return db.execute(select(JobPosting).order_by(JobPosting.first_seen_at.desc())).scalars().all()
+
+
+@router.post("/postings", response_model=PostingOut, status_code=201)
+def add_posting(body: PostingIn, db: Session = Depends(get_db)) -> JobPosting:
+    comp = get_or_create_company(db, body.company)
+    row = JobPosting(
+        company_id=comp.id, title=body.title, normalized_title=normalize_title(body.title),
+        external_job_id=normalize_req_id(body.external_job_id), posting_url=body.posting_url,
+        canonical_posting_url=canonical_url(body.posting_url), ats_platform=detect_ats(body.posting_url),
+        location=body.location, work_mode=body.work_mode, employment_type=body.employment_type,
+        season=body.season, source="manual", description_excerpt=body.description_excerpt,
     )
+    db.add(row)
     db.commit()
-    return MessageOut(message="Duplicate suggestion restored")
+    return row
 
 
-@router.post("/merge", response_model=ApplicationDetailOut)
-def merge_applications(
-    payload: MergeApplicationsIn, db: Session = Depends(get_db)
-) -> ApplicationDetailOut:
-    """Merge source into target: move events/suggestions, enrich fields, delete source."""
-    if payload.source_id == payload.target_id:
-        raise HTTPException(status_code=400, detail="Cannot merge an application into itself")
-    source = db.get(Application, payload.source_id)
-    target = db.get(Application, payload.target_id)
-    if source is None or target is None:
-        raise HTTPException(status_code=404, detail="Application not found")
+@router.get("/resumes", response_model=list[ResumeOut])
+def resumes(db: Session = Depends(get_db)) -> list:
+    return db.execute(select(ResumeVersion).order_by(ResumeVersion.created_at.desc())).scalars().all()
 
-    for event in list(source.events):
-        event.application_id = target.id
-    for suggestion in list(source.suggestions):
-        suggestion.application_id = target.id
 
-    # Prefer non-placeholder title/company and fill empty optional fields.
-    if (not target.title or target.title.lower() == "unknown") and source.title:
-        target.title = source.title
-    if source.job_id and not target.job_id:
-        target.job_id = source.job_id
-    # "Ghosted" records an absence of news, so any real outcome on the other
-    # row outranks it regardless of which way round the merge was done.
-    if target.status == ApplicationStatus.ghosted and source.status != ApplicationStatus.ghosted:
-        target.status = source.status
-    if source.location and not target.location:
-        target.location = source.location
-    if source.url and not target.url:
-        target.url = source.url
-    if source.salary and not target.salary:
-        target.salary = source.salary
-    if source.notes:
-        target.notes = (
-            f"{target.notes}\n\n--- merged ---\n{source.notes}".strip()
-            if target.notes
-            else source.notes
-        )
-    if source.description and not target.description:
-        target.description = source.description
-    if source.skills and not target.skills:
-        target.skills = source.skills
-    if source.contact_email and not target.contact_email:
-        target.contact_email = source.contact_email
-    if source.date_applied and (
-        not target.date_applied or source.date_applied < target.date_applied
-    ):
-        target.date_applied = source.date_applied
-
-    db.add(
-        StatusEvent(
-            application_id=target.id,
-            from_status=target.status,
-            to_status=target.status,
-            note=f"Merged application #{source.id} ({source.company} — {source.title})",
-            source=EventSource.system,
-        )
-    )
-    _forget_dismissals(db, source.id)
-    db.delete(source)
+@router.post("/resumes", response_model=ResumeOut, status_code=201)
+def add_resume(body: ResumeIn, db: Session = Depends(get_db)) -> ResumeVersion:
+    # Metadata only. Resume bytes are never read, stored, or sent anywhere.
+    row = ResumeVersion(**body.model_dump())
+    db.add(row)
     db.commit()
-    db.refresh(target)
-    return _detail_out(db, target)
+    return row
 
 
-@router.post("/import", response_model=MessageOut)
-async def import_applications(
-    file: UploadFile = File(...), db: Session = Depends(get_db)
-) -> MessageOut:
-    raw = (await file.read()).decode("utf-8-sig", errors="replace")
-    filename = (file.filename or "").lower()
+# --- action items / assessments -------------------------------------------------------------
 
-    rows: list[dict] = []
-    if filename.endswith(".json") or raw.lstrip().startswith(("[", "{")):
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}") from exc
-        rows = data if isinstance(data, list) else [data]
-    else:
-        rows = list(csv.DictReader(io.StringIO(raw)))
 
-    imported = 0
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        company = (row.get("company") or "").strip()
-        title = (row.get("title") or "").strip()
-        if not company and not title:
-            continue
-        app = Application(
-            company=company or "Unknown",
-            title=title or "Unknown",
-            location=(row.get("location") or None),
-            url=(row.get("url") or None),
-            source=(row.get("source") or None),
-            salary=(row.get("salary") or None),
-            status=_coerce_status(row.get("status")),
-            skills=(row.get("skills") or None),
-            notes=(row.get("notes") or None),
-            contact_email=(row.get("contact_email") or None),
-            date_applied=_coerce_date(row.get("date_applied")),
-            description=(row.get("description") or None),
-        )
-        db.add(app)
-        db.flush()
-        db.add(
-            StatusEvent(
-                application_id=app.id,
-                from_status=None,
-                to_status=app.status,
-                note="Imported",
-                source=EventSource.system,
-            )
-        )
-        imported += 1
+@router.get("/action-items", response_model=list[ActionItemOut])
+def action_items(
+    state: list[str] | None = Query(None),
+    urgency_filter: str | None = Query(None, alias="urgency"),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    stmt = select(ActionItem)
+    stmt = stmt.where(ActionItem.state.in_(state or ["open", "needs_review"]))
+    rows = [action_out(i, db=db) for i in db.execute(stmt).scalars()]
+    if urgency_filter:
+        rows = [r for r in rows if r["urgency"] == urgency_filter]
+    return sorted(rows, key=_due_sort_key)
 
+
+def _due_sort_key(r: dict) -> tuple:
+    if r["due_at"]:
+        return (0, r["due_at"].isoformat())
+    if r["due_date"]:
+        return (0, r["due_date"] + "T00:00")
+    return (1, "")
+
+
+@router.post("/action-items/{item_id}", response_model=ActionItemOut)
+def edit_action_item(item_id: str, body: ActionItemEdit, db: Session = Depends(get_db)) -> dict:
+    item = db.get(ActionItem, item_id)
+    if item is None:
+        raise not_found("action item not found")
+    changes = body.model_dump(exclude_unset=True)
+    desc = []
+    if "due_at" in changes or "due_date" in changes:
+        if changes.get("due_at") is not None and changes["due_at"].tzinfo is None:
+            raise HTTPException(422, "due_at must include a timezone offset")
+        desc.append(f"deadline {item.due_at or item.due_date} -> {changes.get('due_at') or changes.get('due_date')}")
+        item.due_at = changes.get("due_at")
+        item.due_date = changes.get("due_date")
+        item.due_precision = "instant" if item.due_at else ("day" if item.due_date else "unknown")
+        item.deadline_assumption = "Set manually by the user."
+        item.deadline_confidence = 1.0
+        if item.state == "needs_review":
+            item.state = "open"
+    if changes.get("state"):
+        desc.append(f"state {item.state} -> {changes['state']}")
+        item.state = changes["state"]
+        if item.state == "completed":
+            item.completed_at = utcnow()
+            if item.assessment_id:
+                a = db.get(Assessment, item.assessment_id)
+                if a and a.state in {"invited", "started"}:
+                    a.state, a.completed_at = "completed", utcnow()
+    if changes.get("note"):
+        item.instruction = ((item.instruction or "") + f" [Note: {changes['note']}]").strip()
+    audit(db, application_id=item.application_id, event_type="action_item_edit",
+          description=f"{item.title}: " + "; ".join(desc or ["note added"]), key=f"ai:{item.id}:{utcnow().isoformat()}")
     db.commit()
-    return MessageOut(message=f"Imported {imported} application(s).")
+    return action_out(item, db=db)
 
 
-@router.get("/{app_id}", response_model=ApplicationDetailOut)
-def get_application(
-    app_id: int, db: Session = Depends(get_db)
-) -> ApplicationDetailOut:
-    app = db.get(Application, app_id)
-    if app is None:
-        raise HTTPException(status_code=404, detail="Application not found")
-    return _detail_out(db, app)
-
-
-@router.patch("/{app_id}", response_model=ApplicationDetailOut)
-def update_application(
-    app_id: int, payload: ApplicationUpdate, db: Session = Depends(get_db)
-) -> ApplicationDetailOut:
-    app = db.get(Application, app_id)
-    if app is None:
-        raise HTTPException(status_code=404, detail="Application not found")
-
-    data = payload.model_dump(exclude_unset=True)
-    status_note = data.pop("status_note", None)
-    new_status = data.get("status")
-
-    if new_status is not None and new_status != app.status:
-        db.add(
-            StatusEvent(
-                application_id=app.id,
-                from_status=app.status,
-                to_status=new_status,
-                note=status_note or "Status updated",
-                source=EventSource.manual,
-            )
-        )
-
-    for key, value in data.items():
-        setattr(app, key, value)
-
+@router.post("/assessments/{assessment_id}/complete", response_model=ApplicationOut)
+def complete_assessment(assessment_id: str, db: Session = Depends(get_db)) -> dict:
+    a = db.get(Assessment, assessment_id)
+    if a is None:
+        raise not_found("assessment not found")
+    a.state, a.completed_at = "completed", utcnow()
+    for item in db.execute(select(ActionItem).where(ActionItem.assessment_id == a.id, ActionItem.state.in_(("open", "needs_review")))).scalars():
+        item.state, item.completed_at = "completed", utcnow()
+    app = db.get(Application, a.application_id)
+    prev = app.stage
+    if app.stage == "assessment_invited":
+        app.stage, app.stage_updated_at = "assessment_completed", utcnow()
+        app.stage_evidence_at = utcnow()
+    audit(db, application_id=app.id, event_type="assessment_completed", description="Marked assessment completed manually.",
+          from_stage=prev if app.stage != prev else None, to_stage=app.stage if app.stage != prev else None,
+          key=f"oa-done:{a.id}:{utcnow().isoformat()}")
     db.commit()
-    db.refresh(app)
-    return _detail_out(db, app)
+    return application_out(db, app)
 
-
-@router.delete("/{app_id}", response_model=MessageOut)
-def delete_application(app_id: int, db: Session = Depends(get_db)) -> MessageOut:
-    app = db.get(Application, app_id)
-    if app is None:
-        raise HTTPException(status_code=404, detail="Application not found")
-    _forget_dismissals(db, app.id)
-    db.delete(app)
-    db.commit()
-    return MessageOut(message="Application deleted")

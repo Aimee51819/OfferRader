@@ -5,7 +5,7 @@ import zipfile
 def test_backup_contains_database_and_key(client):
     client.post(
         "/api/applications",
-        json={"company": "Acme", "title": "SWE", "status": "applied"},
+        json={"company": "Acme", "role_title": "SWE"},
     )
 
     r = client.get("/api/backup")
@@ -19,13 +19,13 @@ def test_backup_contains_database_and_key(client):
 def test_restore_replaces_current_data(client):
     client.post(
         "/api/applications",
-        json={"company": "Original", "title": "SWE", "status": "applied"},
+        json={"company": "Original", "role_title": "SWE"},
     )
     snapshot = client.get("/api/backup").content
 
     client.post(
         "/api/applications",
-        json={"company": "AddedLater", "title": "PM", "status": "applied"},
+        json={"company": "AddedLater", "role_title": "PM"},
     )
     assert len(client.get("/api/applications").json()) == 2
 

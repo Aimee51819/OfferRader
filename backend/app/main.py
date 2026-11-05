@@ -9,36 +9,22 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .api import (
-    analytics,
-    applications,
-    backup,
-    emails,
-    parse,
-    settings,
-    suggestions,
-    updates,
-)
+from .api import applications, backup, dashboard, integrations, io, mail, reviews, settings, updates
+from .api.deps import LocalOnlyMiddleware
 from .config import settings as app_settings
 from .db import SessionLocal, get_db, init_db
-from .models import EmailAccount
 from .ports import APP_ID, server_port
 from .scheduler import shutdown as shutdown_scheduler
 from .scheduler import start as start_scheduler
-from .services import sync_progress
-from .services.llm.service import get_active_provider
-from .services.settings_service import get_poll_interval
+from .scheduler import status as scheduler_status
+from .services import settings_service
 from .version import __version__
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("tracker")
 
-# Resolve the built frontend directory relative to this file so it works
-# regardless of where the process is launched from. PyInstaller unpacks
-# datas into sys._MEIPASS.
 _HERE = Path(__file__).parent
 if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
     STATIC_DIR = Path(sys._MEIPASS) / "frontend" / "dist"
@@ -46,108 +32,98 @@ else:
     STATIC_DIR = _HERE.parent.parent / "frontend" / "dist"
 
 
+def _check_bind() -> None:
+    host = app_settings.bind_host
+    if host not in {"127.0.0.1", "localhost", "::1"} and not app_settings.allow_non_loopback:
+        raise RuntimeError(
+            f"BIND_HOST={host} would expose the tracker beyond this Mac. Keep 127.0.0.1, or set "
+            "ALLOW_NON_LOOPBACK=true only behind authentication + TLS after a security review."
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _check_bind()
     init_db()
     db = SessionLocal()
     try:
-        interval = get_poll_interval(db, app_settings.email_poll_interval_seconds)
+        from .services.sync import recover_interrupted_runs
+
+        n = recover_interrupted_runs(db)
+        if n:
+            logger.info("Marked %s interrupted sync run(s); they resume from the saved cursor.", n)
+        settings_service.integration_token(db)
+        interval = int(settings_service.get(db, "poll_interval_seconds"))
     finally:
         db.close()
-    start_scheduler(interval)
+    if "pytest" not in sys.modules:
+        start_scheduler(interval)
     try:
         yield
     finally:
         shutdown_scheduler()
 
 
-app = FastAPI(title="Job Application Tracker", version=__version__, lifespan=lifespan)
-
-# The launcher may land on a port other than 8000 when it is busy.
-_port = server_port()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        app_settings.frontend_origin,
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        f"http://localhost:{_port}",
-        f"http://127.0.0.1:{_port}",
-    ],
-    # No extension origins: the capture extension's host_permissions already
-    # exempt it from CORS, and allowing chrome-extension://* would let every
-    # installed extension read this API.
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+app = FastAPI(
+    title="Job Application Feedback Agent",
+    version=__version__,
+    lifespan=lifespan,
+    description="Local-first tracker. Read-only mailbox access; local Qwen via Ollama; no auto-submission.",
 )
 
-app.include_router(applications.router)
-app.include_router(analytics.router)
-app.include_router(parse.router)
-app.include_router(emails.router)
-app.include_router(suggestions.router)
-app.include_router(settings.router)
-app.include_router(backup.router)
-app.include_router(updates.router)
+_port = server_port()
+_origins = [
+    app_settings.frontend_origin,
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    f"http://localhost:{_port}",
+    f"http://127.0.0.1:{_port}",
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    allow_headers=["Content-Type", "Authorization"],
+)
+app.add_middleware(LocalOnlyMiddleware, allowed_origins=_origins)
+
+for r in (applications, dashboard, reviews, mail, settings, io, integrations, backup, updates):
+    app.include_router(r.router)
 
 
 @app.get("/api/identity")
 def identity() -> dict:
-    """Cheap fingerprint for port probing: no DB access, always the same shape."""
     return {"app": APP_ID, "version": __version__}
 
 
 @app.get("/api/health")
 def health(db: Session = Depends(get_db)) -> dict:
-    try:
-        provider = get_active_provider(db)
-        accounts = list(db.execute(select(EmailAccount)).scalars().all())
-        active_accounts = [a for a in accounts if a.active]
-        last_synced = max(
-            (a.last_synced_at for a in accounts if a.last_synced_at),
-            default=None,
-        )
-        llm = {
-            "configured": provider is not None,
-            "name": provider.name if provider else None,
-            "provider": provider.provider if provider else None,
-            "model": provider.model if provider else None,
-        }
-        email = {
-            "accounts": len(accounts),
-            "active": len(active_accounts),
-            "last_synced_at": last_synced.isoformat() if last_synced else None,
-        }
-        # Release any open transaction immediately — health is polled often.
-        db.commit()
-    except Exception as exc:  # noqa: BLE001 - never let health hang/crash startup
-        logger.warning("Health DB check failed: %s", exc)
-        llm = {"configured": False, "name": None, "provider": None, "model": None}
-        email = {"accounts": 0, "active": 0, "last_synced_at": None, "error": str(exc)}
+    from .api.dashboard import sync_health
+    from .services.llm.ollama import LLMError, default_backend
 
+    try:
+        llm = default_backend(
+            model=settings_service.get(db, "ollama_model"), base_url=settings_service.get(db, "ollama_base_url")
+        ).health()
+    except LLMError as exc:
+        llm = {"ok": False, "error": str(exc)}
     return {
         "status": "ok",
         "version": __version__,
         "llm": llm,
-        "email": email,
-        "sync": sync_progress.get(),
+        "sync": sync_health(db),
+        "scheduler": scheduler_status(),
     }
 
 
-# Serve the built React app if frontend/dist exists.
-# In dev mode (npm run dev) this is skipped and Vite handles the frontend.
 if STATIC_DIR.is_dir():
     app.mount("/assets", StaticFiles(directory=str(STATIC_DIR / "assets")), name="assets")
 
     @app.get("/favicon.svg", include_in_schema=False)
     async def favicon() -> FileResponse:
-        """Served explicitly: the SPA fallback below would return index.html."""
         return FileResponse(str(STATIC_DIR / "favicon.svg"), media_type="image/svg+xml")
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def spa_fallback(full_path: str) -> FileResponse:
-        """Return index.html for any non-API path so client-side routing works."""
-        index = STATIC_DIR / "index.html"
-        return FileResponse(str(index))
+        return FileResponse(str(STATIC_DIR / "index.html"))

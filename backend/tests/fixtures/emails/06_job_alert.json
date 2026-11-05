@@ -1,0 +1,56 @@
+{
+  "name": "06_job_alert",
+  "account": "primary",
+  "provider_message_id": "m06",
+  "thread_id": "thr-m06",
+  "internet_message_id": "<m06@mail.example>",
+  "from_name": "Career Alerts",
+  "from_address": "alerts@jobboard.example",
+  "subject": "Product Manager Intern at Globex and 12 new jobs for you",
+  "received_at": "2027-02-05T11:00:00Z",
+  "sent_at": "2027-02-05T11:00:00Z",
+  "body": "Jobs you may be interested in\n\nProduct Manager Intern - Globex - New York, NY\nBe an early applicant. Apply now to Solutions Engineer Intern at Initech.\n\n12 new jobs matching your preferences.\nUnsubscribe from job alerts.",
+  "expected": {
+    "is_job_related": false,
+    "events": [
+      "job_alert"
+    ],
+    "company": null,
+    "role": null
+  },
+  "model_output": {
+    "schema_version": "1.0",
+    "is_job_related": false,
+    "language": "en",
+    "company": {
+      "name": null,
+      "domain": null,
+      "confidence": 0.0
+    },
+    "role": {
+      "title": null,
+      "requisition_id": null,
+      "job_url": null,
+      "confidence": 0.0
+    },
+    "events": [
+      {
+        "type": "job_alert",
+        "event_time": null,
+        "event_time_raw": null,
+        "action_required": null,
+        "assessment_type": null,
+        "assessment_provider": null,
+        "action_url": null,
+        "deadline": null,
+        "evidence_quotes": [
+          "Jobs you may be interested in"
+        ],
+        "confidence": 0.95
+      }
+    ],
+    "overall_confidence": 0.95,
+    "ambiguities": [],
+    "needs_review": false
+  }
+}

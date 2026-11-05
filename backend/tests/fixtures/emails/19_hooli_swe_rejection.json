@@ -1,0 +1,56 @@
+{
+  "name": "19_hooli_swe_rejection",
+  "account": "primary",
+  "provider_message_id": "m19",
+  "thread_id": "thr-m19",
+  "internet_message_id": "<m19@mail.example>",
+  "from_name": "Hooli",
+  "from_address": "no-reply@lever-mail.example",
+  "subject": "Update on your Hooli application",
+  "received_at": "2027-03-05T17:00:00Z",
+  "sent_at": "2027-03-05T17:00:00Z",
+  "body": "Hi Aimee,\n\nThank you for your interest in the Software Engineer Intern position at Hooli. Unfortunately, we will not be moving forward with your application at this time.\n\nHooli",
+  "expected": {
+    "is_job_related": true,
+    "events": [
+      "rejection"
+    ],
+    "company": "Hooli",
+    "role": "Software Engineer Intern"
+  },
+  "model_output": {
+    "schema_version": "1.0",
+    "is_job_related": true,
+    "language": "en",
+    "company": {
+      "name": "Hooli",
+      "domain": null,
+      "confidence": 0.95
+    },
+    "role": {
+      "title": "Software Engineer Intern",
+      "requisition_id": null,
+      "job_url": null,
+      "confidence": 0.9
+    },
+    "events": [
+      {
+        "type": "rejection",
+        "event_time": null,
+        "event_time_raw": null,
+        "action_required": null,
+        "assessment_type": null,
+        "assessment_provider": null,
+        "action_url": null,
+        "deadline": null,
+        "evidence_quotes": [
+          "we will not be moving forward with your application"
+        ],
+        "confidence": 0.92
+      }
+    ],
+    "overall_confidence": 0.92,
+    "ambiguities": [],
+    "needs_review": false
+  }
+}
