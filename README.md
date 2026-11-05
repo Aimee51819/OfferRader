@@ -2,206 +2,94 @@
   <img src="docs/banner.png" alt="Job Application Tracker" width="100%" />
 </p>
 
-<h1 align="center">Job Application Tracker</h1>
+<h1 align="center">Job Application Feedback Agent</h1>
 
 <p align="center">
-  <strong>Self-hosted, AI-powered job application tracker that reads your inbox.</strong><br />
-  Bring your own model — OpenAI, Claude, Gemini, or a local Ollama model. No accounts, no servers, no cost.
+  <strong>A local-first tracker that reads recruiting email read-only, extracts OA deadlines with a local Qwen model, and stops you from applying to the same opening twice.</strong>
 </p>
 
-<p align="center">
-  <a href="#quickstart"><img src="https://img.shields.io/badge/setup-one%20command-6366f1" alt="One-command setup" /></a>
-  <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License" />
-  <img src="https://img.shields.io/badge/backend-FastAPI-009688" alt="FastAPI" />
-  <img src="https://img.shields.io/badge/frontend-React-61dafb" alt="React" />
-  <img src="https://img.shields.io/badge/LLM-OpenAI%20%7C%20Claude%20%7C%20Gemini%20%7C%20Ollama-8b5cf6" alt="LLM providers" />
-</p>
+Built on [liamgelfand/application-tracker](https://github.com/liamgelfand/application-tracker) (MIT). Everything runs on your Mac: FastAPI + SQLite backend, React dashboard, Ollama for the model. Nothing is sent to a cloud AI service, and no email is ever sent, moved, deleted or marked read.
 
----
+## What it answers
 
-Track your job search end to end. Paste a job listing and AI fills in the details; connect your email and it detects confirmations, interviews, and rejections and updates your board automatically. Everything runs locally on your machine.
-
-## Screenshots
-
-| Dashboard (kanban board) | Analytics |
+| Question | Where |
 | --- | --- |
-| ![Dashboard](docs/screenshots/dashboard.png) | ![Analytics](docs/screenshots/analytics.png) |
+| Where have I *actually* applied (company, exact role, req id / URL, date, channel, resume)? | Dashboard table → **Evidence** column (✓ Verified vs Unverified) |
+| What is each application's latest verified status? | Stage badge + per-application timeline (append-only event history) |
+| What do I need to do now, and by when (Eastern Time), in the email's own words? | **Deadlines** page, application detail |
+| Which OAs are due in 72 h / 24 h / 3 h, overdue, or have no reliable deadline? | **Deadlines** page buckets, dashboard cards, reminders |
+| Am I about to apply to the same opening again? | **Add application** live preflight: BLOCK / WARN / ALLOW with reasons |
+| What changed since the last sync, and what needs my review? | Dashboard "Since last sync", **Review queue** |
 
-| Review queue | Settings |
-| --- | --- |
-| ![Review queue](docs/screenshots/review.png) | ![Settings](docs/screenshots/settings.png) |
+## Safety properties
 
-> Want to regenerate these? Run `cd backend && python -m scripts.seed_demo --reset` to load demo data, then `make dev` and capture the screens.
+- **Read-only mail.** Gmail uses `gmail.readonly`, Microsoft Graph uses delegated `Mail.Read`, both via OAuth 2.0 + PKCE. The HTTP client used by both adapters can only issue `GET` requests to the provider's API host. Optional IMAP uses `EXAMINE` + `BODY.PEEK[]`.
+- **Local model only.** Qwen3-4B-Instruct through Ollama on loopback. The Ollama URL must resolve to a loopback address; there is no OpenAI/Anthropic/Gemini fallback. If Ollama is down, mail waits in the local store and is parsed later.
+- **Never invents facts.** The model only quotes. A deterministic normalizer computes deadlines; date-only deadlines stay date-only; a time without a timezone never becomes a UTC instant; DST gaps/overlaps and business-day counts go to review.
+- **One event → one application.** Company-only evidence never auto-attaches; a rejection for one requisition can't touch another.
+- **Review-first.** Terminal decisions (rejection, offer, withdrawal), ambiguous matches/deadlines, conflicting reminders, unknown applications and pinned stages always wait for you. Every approve / edit / reassign / reject / undo is audited.
+- **No auto-applying.** This tool never submits applications. A separate, human-approved tool may report a *confirmed* receipt to `POST /api/integrations/submissions`.
 
-## Features
+## Quick start (Apple Silicon Mac)
 
-- **Kanban board + table** to track applications across stages: Saved, Applied, Online Assessment, Phone Screen, Interview, Offer, Rejected, Ghosted, Accepted.
-- **Paste-to-add**: paste any job listing and an LLM extracts the company, title, location, salary, URL, skills, and a summary. Review, then save.
-- **Browser extension**: capture the job listing on the page you're viewing in one click (see [`extension/`](extension/)).
-- **Inbox monitoring (IMAP)**: connect any email provider. A background job reads new mail, detects job-related messages (confirmations, recruiter outreach, interview invites, rejections), matches them to your applications, and proposes updates.
-- **Review queue**: proposed changes wait for your approval by default (flip on auto-apply if you trust it).
-- **Drag-and-drop board** plus **desktop notifications** when new job emails need review.
-- **Analytics**: response rate, interview rate, offer rate, average days to response, and applications-per-week.
-- **CSV / JSON import and export** so you can bring in an existing spreadsheet or back up your data.
-- **Multiple AI providers, toggleable**: configure several providers with their own keys and models, and switch the active one anytime. Local models via Ollama are fully supported.
-- **Per-application timeline** recording every status change and email event.
-- **Secrets encrypted at rest**: API keys and email passwords are encrypted with a locally generated key.
-
-## Tech stack
-
-- **Backend**: Python, FastAPI, SQLAlchemy, SQLite, APScheduler, LiteLLM (unified LLM interface).
-- **Frontend**: React, TypeScript, Vite, TanStack Query.
-
-## Architecture
-
-```
-frontend (React)  ->  backend (FastAPI)  ->  SQLite
-                             |-> LLM layer (LiteLLM) -> OpenAI / Anthropic / Gemini / Ollama
-                             |-> IMAP poller (APScheduler) -> your inbox -> review queue
-```
-
-## Quickstart
-
-Requires **Python 3.11+** and **Node 18+**.
+Full walkthrough including OAuth app registration: **[docs/SETUP_MACOS.md](docs/SETUP_MACOS.md)**.
 
 ```bash
-git clone <your-repo-url> application-tracker
-cd application-tracker
-make setup   # install backend + frontend dependencies (run once)
-make app     # build the frontend, then launch the tray app
+brew install python@3.12 node ollama
 ```
-
-The app sits in the system tray (it does not auto-open the browser).
-Right-click the tray icon to **Open**, run a **Health Check**, enable **Start on Login**, or **Quit**.
-
-The server listens on `http://127.0.0.1:8000`. If that port is busy, the launcher takes the next free port up to 8100, logs which one it chose, and opens the browser there. Pass `--port <number>` to `launcher.py` to start the search somewhere else. Launching again while AppTracker is running just opens the running copy.
-
-> **Windows note:** `make` isn't built in — install it with `winget install GnuWin32.Make` or use [Git Bash](https://gitforwindows.org/).  
-> Alternatively run the two commands manually:
-> ```powershell
-> cd frontend; npm run build; cd ..
-> backend\.venv\Scripts\python backend\launcher.py
-> ```
-
-### For contributors (live reload)
 
 ```bash
-make dev    # backend on :8000 + Vite dev server on :5173 simultaneously
+git clone <your fork> application-tracker && cd application-tracker
+make setup
 ```
-
-### Docker
 
 ```bash
-docker compose up --build   # available at http://localhost:8080
+ollama serve   # or open the Ollama app
 ```
 
-Run `make help` to see all available commands.
+```bash
+ollama pull qwen3:4b-instruct-2507-q4_K_M
+```
 
-## First-time setup
+```bash
+cp backend/.env.example backend/.env   # then add OAuth client IDs
+make migrate
+make check-ollama
+make dev       # backend http://127.0.0.1:8000, UI http://localhost:5173
+```
 
-1. Open the app and go to **Settings**.
-2. Under **AI Providers**, add a provider:
-   - **OpenAI / Anthropic / Gemini**: pick a model and paste your API key.
-   - **Ollama**: no key needed. Install [Ollama](https://ollama.com), run `ollama pull llama3.1`, and make sure it's running at `http://localhost:11434`.
-   - You can add several and use **Set Active** to switch between them anytime.
-3. (Optional) Under **Monitored Inboxes**, add an IMAP account and click **Test Connection**.
-   - For Gmail/Outlook, create an **app password** (not your normal password) and use that.
-   - Common IMAP hosts: `imap.gmail.com` (993), `outlook.office365.com` (993).
-4. Go to **Add Application**, paste a job listing, and click **Parse with AI**.
+Try it with synthetic mail first (separate data directory, no network):
 
-## Configuration
+```bash
+cd backend && DATA_DIR=./demo-data .venv/bin/python -m app.cli demo --reset
+DATA_DIR=./demo-data .venv/bin/uvicorn app.main:app --port 8000
+```
 
-Backend settings are read from environment variables or a `backend/.env` file (see `backend/.env.example`):
+## Tests and evaluation
 
-| Variable | Default | Description |
-| --- | --- | --- |
-| `DATA_DIR` | per-user app data dir | Where the SQLite DB and encryption key live. Unset it and the app uses `%LOCALAPPDATA%\AppTracker` on Windows, `~/Library/Application Support/AppTracker` on macOS, or `~/.local/share/AppTracker` on Linux. An existing `data/tracker.db` in the repo is copied there once on first start. |
-| `FRONTEND_ORIGIN` | `http://localhost:5173` | Allowed CORS origin. |
-| `EMAIL_POLL_INTERVAL_SECONDS` | `900` | Default inbox poll interval (changeable in Settings). |
-| `APP_SECRET_KEY` | auto-generated | Override the encryption key (base64 urlsafe, 32 bytes). |
+```bash
+make test                      # 104 backend tests + 12 frontend tests
+make eval                      # score your installed Qwen on the synthetic corpus (needs Ollama)
+cd backend && .venv/bin/python -m app.cli eval --backend rules   # regex baseline, for comparison
+cd backend && .venv/bin/python -m app.cli reparse-fixtures --backend ollama 03_ibm_pm_oa  # re-parse fixtures in a sandbox
+```
+
+## Documentation
+
+- [docs/SETUP_MACOS.md](docs/SETUP_MACOS.md) — install, Ollama model, OAuth consent checklist (Gmail + Microsoft), first sync, Docker option.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — ER diagram, pipeline, extraction JSON contract, matching / transition / duplicate policies, REST endpoints, known limitations.
+- Interactive API docs: http://127.0.0.1:8000/docs
 
 ## Security notes
 
-- This is a **single-user, local-first** app with no authentication by default. Don't expose it directly to the public internet without adding auth and TLS.
-- API keys and email passwords are encrypted at rest using a key stored in `DATA_DIR/secret.key`. Keep it private and backed up — if you lose the key, stored secrets can't be decrypted.
-- Use **Settings → Backup → Download backup** for a single zip containing both the database and that key, and **Restore…** to load one back. Restoring keeps the replaced dataset in a `pre-restore-<timestamp>` folder beside the database.
-- Your email/API credentials never leave your machine except to talk to the providers you configure.
-- Storing data outside the repo also keeps SQLite away from cloud-sync clients, which corrupt WAL files.
-
-## Testing
-
-```bash
-# Backend (pytest)
-cd backend
-pip install -r requirements-dev.txt
-pytest
-
-# Frontend (vitest)
-cd frontend
-npm run test
-```
-
-Both suites also run automatically in CI on every push and pull request.
-
-## API
-
-Interactive API docs are available at http://localhost:8000/docs when the backend is running (swap in the launcher's port if it moved off 8000). `GET /api/identity` returns `{"app": "apptracker"}` so tools can confirm they found AppTracker and not some other app on the port.
-
-## Download a prebuilt Windows app
-
-Grab `AppTracker.exe` from the [latest release](../../releases/latest). It needs no
-Python install. SmartScreen will warn that the publisher is unknown because the
-build isn't code-signed — choose **More info → Run anyway**.
-
-The app opens your browser once, then lives in the system tray. Right-click the
-tray icon for **Open**, **Health Check**, **Start on Login**, and **Quit**.
-
-Pushing a `v*` tag builds and drafts a release via
-[`.github/workflows/release.yml`](.github/workflows/release.yml):
-
-```bash
-git tag v1.0.0 && git push origin v1.0.0
-```
-
-### Building the `.exe` yourself
-
-```bash
-make setup
-make build                      # frontend/dist must exist first
-pip install pyinstaller
-python backend/scripts/make_icon.py   # generates backend/assets/icon.ico
-make dist                       # writes dist/AppTracker.exe
-```
-
-Or manually:
-
-```powershell
-cd frontend; npm run build; cd ..
-backend\.venv\Scripts\pip install pyinstaller
-backend\.venv\Scripts\python backend\scripts\make_icon.py
-backend\.venv\Scripts\pyinstaller --noconfirm backend\apptracker.spec
-```
-
-The first run may still need Visual C++ redistributables. Keep the *source
-checkout* off OneDrive and other synced folders — `node_modules` and `.venv`
-thrash sync clients.
-
-## Roadmap / ideas
-
-See [TODO.md](TODO.md) for the planned **research agent** (web scrape to fill job description / title / location when emails are thin).
-
-- Interview calendar (.ics) export.
-- Resume-tailoring suggestions per listing.
-- Notifications to Slack/Discord/email in addition to desktop.
-- Optional authentication for hosted deployments.
-- Firefox build of the browser extension.
-
-Done so far: browser extension, analytics, CSV/JSON import & export, drag-and-drop board, desktop notifications, follow-up reminders, merge UI, editable review queue, sync progress, tray health check.
-
-## Contributing
-
-Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and guidelines. This project is intentionally simple to fork and extend.
+- Single-user and **local only**: the server binds `127.0.0.1`, rejects non-loopback clients and unexpected `Host` headers (DNS rebinding), and blocks cross-origin writes. Startup refuses a non-loopback `BIND_HOST` unless `ALLOW_NON_LOOPBACK=true`.
+- **Do not expose this to the internet.** A remote deployment needs authentication, TLS and a security review first; none of that is provided here. Never port-forward 8000, 5173, or Ollama's 11434.
+- OAuth tokens and IMAP passwords are encrypted at rest (Fernet) in SQLite, keyed by `DATA_DIR/secret.key` (mode 0600) or, with `USE_KEYCHAIN=true`, the macOS Keychain. Tokens are never logged or returned by the API. **Disconnect** deletes the token (and revokes it at Google).
+- Email bodies are converted to plain text, capped in size, wrapped as untrusted data in the prompt and never rendered as HTML. Attachments are skipped. Bodies are cached encrypted only until parsed; a short plain-text evidence excerpt is kept for review.
+- The integration endpoint needs `Authorization: Bearer <token>` (`python -m app.cli integration-token`).
+- No telemetry or third-party analytics. The only outbound calls are to Google/Microsoft APIs (when you connect a mailbox) and the optional, user-triggered update check inherited from upstream (Windows builds only).
+- Keep `backend/.env`, `DATA_DIR` and backups out of git and cloud-sync folders.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).

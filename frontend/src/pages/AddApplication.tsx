@@ -1,178 +1,143 @@
-import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api } from "../api/client";
-import type { ApplicationStatus, ParsedJob } from "../api/types";
-import { STATUSES, STATUS_LABELS } from "../lib/statuses";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { ApiError, api } from "../api/client";
+import type { DuplicateCheck } from "../api/types";
+import DuplicateNotice from "../components/DuplicateNotice";
 
-interface FormState {
-  company: string;
-  title: string;
-  location: string;
-  url: string;
-  salary: string;
-  source: string;
-  description: string;
-  skills: string;
-  status: ApplicationStatus;
-}
-
-const EMPTY: FormState = {
+const EMPTY = {
   company: "",
-  title: "",
+  role_title: "",
+  external_job_id: "",
+  posting_url: "",
+  recruiting_cycle: "Summer 2027",
+  category: "",
   location: "",
-  url: "",
-  salary: "",
-  source: "",
-  description: "",
-  skills: "",
-  status: "saved",
+  application_channel: "",
+  resume_version_id: "",
+  notes: "",
 };
 
 export default function AddApplication() {
-  const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const [raw, setRaw] = useState("");
-  const [form, setForm] = useState<FormState>(EMPTY);
-  const [error, setError] = useState<string | null>(null);
+  const nav = useNavigate();
+  const [form, setForm] = useState(EMPTY);
+  const [submitted, setSubmitted] = useState(false);
+  const [submittedAt, setSubmittedAt] = useState("");
+  const [check, setCheck] = useState<DuplicateCheck | null>(null);
+  const [override, setOverride] = useState(false);
+  const [reason, setReason] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const { data: resumes = [] } = useQuery({ queryKey: ["resumes"], queryFn: api.resumes });
+  const set = (k: keyof typeof EMPTY) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
+    setForm({ ...form, [k]: e.target.value });
 
-  const parseMutation = useMutation({
-    mutationFn: (text: string) => api.parseJob(text),
-    onSuccess: (parsed: ParsedJob) => {
-      setError(null);
-      setForm((f) => ({
-        ...f,
-        company: parsed.company ?? f.company,
-        title: parsed.title ?? f.title,
-        location: parsed.location ?? f.location,
-        url: parsed.url ?? f.url,
-        salary: parsed.salary ?? f.salary,
-        source: parsed.source ?? f.source,
-        description: parsed.description ?? f.description,
-        skills: parsed.skills.length ? parsed.skills.join(", ") : f.skills,
-      }));
-    },
-    onError: (e: Error) => setError(e.message),
-  });
+  // Live preflight as the user types company / role / req / URL.
+  useEffect(() => {
+    if (!form.company.trim()) {
+      setCheck(null);
+      return;
+    }
+    const t = setTimeout(() => {
+      api
+        .duplicateCheck({
+          company: form.company,
+          role_title: form.role_title || null,
+          external_job_id: form.external_job_id || null,
+          posting_url: form.posting_url || null,
+          recruiting_cycle: form.recruiting_cycle || null,
+        })
+        .then(setCheck)
+        .catch(() => setCheck(null));
+    }, 350);
+    return () => clearTimeout(t);
+  }, [form.company, form.role_title, form.external_job_id, form.posting_url, form.recruiting_cycle]);
 
-  const saveMutation = useMutation({
+  const create = useMutation({
     mutationFn: () =>
       api.createApplication({
-        company: form.company,
-        title: form.title,
-        location: form.location || null,
-        url: form.url || null,
-        salary: form.salary || null,
-        source: form.source || null,
-        description: form.description || null,
-        skills: form.skills || null,
-        status: form.status,
+        ...Object.fromEntries(Object.entries(form).map(([k, v]) => [k, v === "" ? null : v])),
+        confirmed_submitted: submitted,
+        submitted_at: submitted && submittedAt ? new Date(submittedAt).toISOString() : null,
+        override_duplicate: override,
+        override_reason: override ? reason : null,
       }),
-    onSuccess: (app) => {
-      queryClient.invalidateQueries({ queryKey: ["applications"] });
-      navigate(`/applications/${app.id}`);
+    onSuccess: (a) => nav(`/applications/${a.id}`),
+    onError: (e) => {
+      if (e instanceof ApiError && e.status === 409) {
+        setCheck((e.detail as { duplicate_check: DuplicateCheck }).duplicate_check);
+        setErr("Blocked as a duplicate. Review the match below; override only if this really is a different opening.");
+      } else setErr(String(e));
     },
-    onError: (e: Error) => setError(e.message),
   });
 
-  const set = (key: keyof FormState) => (
-    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
-  ) => setForm({ ...form, [key]: e.target.value });
-
+  const blocked = check?.decision === "BLOCK" && !(override && reason.trim());
   return (
-    <div>
+    <div className="stack narrow">
       <div className="page-header">
-        <div>
-          <h1 className="page-title">Add Application</h1>
-          <p className="subtitle">
-            Paste a job listing to auto-fill, or enter details manually.
-          </p>
-        </div>
+        <h1 className="page-title">Add application</h1>
+        <p className="subtitle">The duplicate check runs before anything is saved. This app never submits applications for you.</p>
       </div>
-
-      {error && <div className="alert alert-error">{error}</div>}
-
-      <div className="row" style={{ alignItems: "flex-start" }}>
-        <div className="card" style={{ flex: 1 }}>
-          <label>Paste job listing</label>
-          <textarea
-            style={{ minHeight: 260 }}
-            placeholder="Paste the full job description here, then click Parse..."
-            value={raw}
-            onChange={(e) => setRaw(e.target.value)}
-          />
-          <button
-            className="btn-primary"
-            style={{ marginTop: 12, width: "100%" }}
-            disabled={!raw.trim() || parseMutation.isPending}
-            onClick={() => parseMutation.mutate(raw)}
-          >
-            {parseMutation.isPending ? "Parsing with AI..." : "✨ Parse with AI"}
-          </button>
-          <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>
-            Requires an active LLM provider in Settings.
-          </p>
+      <form
+        className="card stack"
+        onSubmit={(e) => {
+          e.preventDefault();
+          setErr(null);
+          create.mutate();
+        }}
+      >
+        <label className="field">Company *<input required value={form.company} onChange={set("company")} /></label>
+        <label className="field">Exact role title *<input required value={form.role_title} onChange={set("role_title")} /></label>
+        <div className="two-col">
+          <label className="field">Requisition / job ID<input value={form.external_job_id} onChange={set("external_job_id")} /></label>
+          <label className="field">Recruiting cycle<input value={form.recruiting_cycle} onChange={set("recruiting_cycle")} /></label>
         </div>
-
-        <div className="card" style={{ flex: 1.2 }}>
-          <div className="row">
-            <div className="field">
-              <label>Company *</label>
-              <input value={form.company} onChange={set("company")} />
-            </div>
-            <div className="field">
-              <label>Title *</label>
-              <input value={form.title} onChange={set("title")} />
-            </div>
-          </div>
-          <div className="row">
-            <div className="field">
-              <label>Location</label>
-              <input value={form.location} onChange={set("location")} />
-            </div>
-            <div className="field">
-              <label>Salary</label>
-              <input value={form.salary} onChange={set("salary")} />
-            </div>
-          </div>
-          <div className="row">
-            <div className="field">
-              <label>Source</label>
-              <input value={form.source} onChange={set("source")} />
-            </div>
-            <div className="field">
-              <label>Status</label>
-              <select value={form.status} onChange={set("status")}>
-                {STATUSES.map((s) => (
-                  <option key={s} value={s}>
-                    {STATUS_LABELS[s]}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-          <div className="field">
-            <label>URL</label>
-            <input value={form.url} onChange={set("url")} />
-          </div>
-          <div className="field">
-            <label>Skills (comma separated)</label>
-            <input value={form.skills} onChange={set("skills")} />
-          </div>
-          <div className="field">
-            <label>Description</label>
-            <textarea value={form.description} onChange={set("description")} />
-          </div>
-          <button
-            className="btn-primary"
-            style={{ width: "100%" }}
-            disabled={!form.company || !form.title || saveMutation.isPending}
-            onClick={() => saveMutation.mutate()}
-          >
-            {saveMutation.isPending ? "Saving..." : "Save Application"}
-          </button>
+        <label className="field">Posting URL<input type="url" value={form.posting_url} onChange={set("posting_url")} /></label>
+        <div className="two-col">
+          <label className="field">Category
+            <select value={form.category} onChange={set("category")}>
+              <option value="">Infer from title</option>
+              {["PM", "TPM", "SE", "SA", "SWE", "Data", "Other"].map((c) => <option key={c}>{c}</option>)}
+            </select>
+          </label>
+          <label className="field">Channel
+            <select value={form.application_channel} onChange={set("application_channel")}>
+              <option value="">—</option>
+              {["company_site", "ATS", "referral", "LinkedIn", "other"].map((c) => <option key={c}>{c}</option>)}
+            </select>
+          </label>
         </div>
-      </div>
+        <div className="two-col">
+          <label className="field">Location<input value={form.location} onChange={set("location")} /></label>
+          <label className="field">Resume version
+            <select value={form.resume_version_id} onChange={set("resume_version_id")}>
+              <option value="">—</option>
+              {resumes.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+            </select>
+          </label>
+        </div>
+        <label className="field">Notes<textarea rows={2} value={form.notes} onChange={set("notes")} /></label>
+        <fieldset className="card">
+          <label className="row">
+            <input type="checkbox" checked={submitted} onChange={(e) => setSubmitted(e.target.checked)} />
+            I have actually submitted this application (makes it a verified submission)
+          </label>
+          {submitted && (
+            <label className="field">When (your local time)<input type="datetime-local" value={submittedAt} onChange={(e) => setSubmittedAt(e.target.value)} /></label>
+          )}
+          {!submitted && <p className="muted">Saved as "Tracked" — not counted as applied.</p>}
+        </fieldset>
+        <DuplicateNotice check={check} />
+        {check && check.decision !== "ALLOW" && (
+          <label className="row">
+            <input type="checkbox" checked={override} onChange={(e) => setOverride(e.target.checked)} /> Override (recorded in the audit log)
+          </label>
+        )}
+        {override && <label className="field">Override reason *<input value={reason} onChange={(e) => setReason(e.target.value)} /></label>}
+        {err && <div className="alert alert-error" role="alert">{err}</div>}
+        <div className="row">
+          <button className="btn-primary" type="submit" disabled={create.isPending || blocked}>Save</button>
+        </div>
+      </form>
     </div>
   );
 }

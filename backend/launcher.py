@@ -637,20 +637,15 @@ def main() -> None:
             with urllib.request.urlopen(f"{url}/api/health", timeout=3) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             llm = data.get("llm") or {}
-            email = data.get("email") or {}
             sync = data.get("sync") or {}
-            if llm.get("configured"):
-                llm_line = f"LLM: {llm.get('name')} ({llm.get('provider')}/{llm.get('model')})"
-            else:
-                llm_line = "LLM: not configured"
-            email_line = (
-                f"Email: {email.get('active', 0)}/{email.get('accounts', 0)} active"
+            llm_line = (
+                f"Model: {llm.get('model')} ready" if llm.get("ok")
+                else f"Model: not ready ({llm.get('hint') or llm.get('error') or 'unknown'})"
             )
-            if email.get("last_synced_at"):
-                email_line += f" · last sync {email['last_synced_at']}"
-            sync_line = (
-                f"Sync: {sync.get('message') or sync.get('phase') or 'idle'}"
-            )
+            email_line = f"Mailboxes: {sync.get('enabled_accounts', 0)}/{sync.get('accounts', 0)} enabled"
+            if sync.get("last_successful_sync_at"):
+                email_line += f" · last sync {sync['last_successful_sync_at']}"
+            sync_line = "; ".join(sync.get("warnings") or []) or "No sync warnings"
             msg = f"{llm_line}\n{email_line}\n{sync_line}"
             title = "AppTracker — healthy"
             try:

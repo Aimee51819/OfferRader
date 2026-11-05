@@ -1,274 +1,175 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
-import type { ApplicationStatus, Suggestion } from "../api/types";
-import { STATUSES, STATUS_LABELS } from "../lib/statuses";
+import type { Review } from "../api/types";
+import { Empty, ErrorBox, Loading } from "../components/States";
+import { eventLabel, formatDateOnly, formatInstant } from "../lib/format";
 
-function kindLabel(s: Suggestion): string {
-  switch (s.kind) {
-    case "new_application":
-      return "New application detected";
-    case "status_change":
-      return "Status change suggested";
-    default:
-      return "Job-related note";
-  }
+function Deadline({ d }: { d: Review["proposed_changes"]["events"][number]["deadline"] }) {
+  if (!d) return null;
+  return (
+    <div className={d.needs_review ? "alert alert-warn" : ""}>
+      <div>
+        Due: <strong>{d.due_at ? formatInstant(d.due_at) : d.due_date ? `${formatDateOnly(d.due_date)} (date only)` : "could not determine"}</strong>
+      </div>
+      {d.raw && <blockquote className="evidence">“{d.raw}”</blockquote>}
+      {d.assumptions.length > 0 && <ul className="reasons">{d.assumptions.map((a, i) => <li key={i}>{a}</li>)}</ul>}
+    </div>
+  );
 }
 
-type Draft = {
-  company: string;
-  title: string;
-  suggested_status: ApplicationStatus | "";
-};
+function ReviewCard({ r }: { r: Review }) {
+  const qc = useQueryClient();
+  const pc = r.proposed_changes;
+  const [target, setTarget] = useState<string>(r.target?.id ?? (pc.create_application ? "__new__" : ""));
+  const [company, setCompany] = useState(pc.company.resolved_name ?? pc.company.name ?? "");
+  const [role, setRole] = useState(pc.role.title ?? "");
+  const [req, setReq] = useState(pc.role.requisition_id ?? "");
+  const [conflict, setConflict] = useState<"use_new" | "keep_existing">("use_new");
+  const [notes, setNotes] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const done = () => qc.invalidateQueries();
 
-function emailDateLabel(s: Suggestion): string | null {
-  const raw = s.email_date ?? s.created_at;
-  if (!raw) return null;
-  const d = new Date(raw);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: d.getFullYear() === new Date().getFullYear() ? undefined : "numeric",
+  const approve = useMutation({
+    mutationFn: () => {
+      const edits: Record<string, unknown> = {};
+      if (company && company !== (pc.company.resolved_name ?? pc.company.name)) edits.company = company;
+      if (role && role !== pc.role.title) edits.role_title = role;
+      if (req && req !== pc.role.requisition_id) edits.external_job_id = req;
+      if (pc.conflicts.length) edits.conflict_resolution = conflict;
+      return api.approve(r.id, {
+        target_application_id: target && target !== "__new__" ? target : undefined,
+        create_new: target === "__new__",
+        edits: Object.keys(edits).length ? edits : undefined,
+        notes: notes || undefined,
+      });
+    },
+    onSuccess: done,
+    onError: (e) => setErr(String(e)),
   });
+  const reject = useMutation({ mutationFn: () => api.reject(r.id, notes || undefined), onSuccess: done });
+
+  return (
+    <article className="card review-card" aria-label={`Review: ${r.email?.subject ?? r.id}`}>
+      <div className="flex-between">
+        <div>
+          <span className="chip">{r.proposal_type.replace("_", " ")}</span> <strong className="review-reason" title={r.reason}>{r.reason}</strong>
+        </div>
+        <span className="muted">confidence {(r.confidence * 100).toFixed(0)}%</span>
+      </div>
+      <div className="two-col">
+        <section>
+          <h4>Email (evidence)</h4>
+          {r.email ? (
+            <>
+              <div><strong>{r.email.subject}</strong></div>
+              <div className="muted">{r.email.sender_name} &lt;{r.email.sender_address}&gt; · {formatInstant(r.email.received_at)}</div>
+              {/* Plain-text excerpt; never rendered as HTML. */}
+              <pre className="email-excerpt">{r.email.excerpt}</pre>
+              {r.email.web_link && <a href={r.email.web_link} target="_blank" rel="noopener noreferrer nofollow">Open source message ↗</a>}
+            </>
+          ) : <p className="muted">No source email.</p>}
+        </section>
+        <section>
+          <h4>What the agent extracted</h4>
+          <label className="field">Company <input value={company} onChange={(e) => setCompany(e.target.value)} /></label>
+          <div className="muted">{pc.company.resolution}{pc.company.ambiguous ? " (ambiguous)" : ""}</div>
+          <label className="field">Role <input value={role} onChange={(e) => setRole(e.target.value)} /></label>
+          <label className="field">Requisition <input value={req} onChange={(e) => setReq(e.target.value)} /></label>
+          {pc.events.map((e) => (
+            <div key={e.index} className="event-block">
+              <strong>{eventLabel(e.type)}</strong>
+              {e.implied_stage && <span className="muted"> → {e.implied_stage}</span>}
+              {e.action_required && <div>{e.action_required}</div>}
+              {e.evidence_quotes.map((q, i) => <blockquote key={i} className="evidence">“{q}”</blockquote>)}
+              <Deadline d={e.deadline} />
+              {e.interview_time && <Deadline d={e.interview_time} />}
+            </div>
+          ))}
+          {pc.flags.length > 0 && <ul className="reasons warn">{pc.flags.map((f, i) => <li key={i}>{f}</li>)}</ul>}
+          {pc.conflicts.map((c) => (
+            <div key={c.action_item_id} className="alert alert-warn">
+              <strong>Deadline conflict.</strong> On file: {c.existing.due_at ? formatInstant(c.existing.due_at) : c.existing.due_date} (“{c.existing.raw}”).
+              New email: {c.new.due_at ? formatInstant(c.new.due_at) : c.new.due_date} (“{c.new.raw}”).
+              <div className="row">
+                <label><input type="radio" checked={conflict === "use_new"} onChange={() => setConflict("use_new")} /> Use the new deadline</label>
+                <label><input type="radio" checked={conflict === "keep_existing"} onChange={() => setConflict("keep_existing")} /> Keep the existing one</label>
+              </div>
+            </div>
+          ))}
+        </section>
+      </div>
+      <fieldset className="candidates">
+        <legend>Attach to</legend>
+        {r.alternatives.map((c) => (
+          <label key={c.application_id} className={`candidate ${c.disqualified ? "muted" : ""}`}>
+            <input type="radio" name={`t-${r.id}`} checked={target === c.application_id} disabled={c.disqualified} onChange={() => setTarget(c.application_id)} />
+            <span>
+              <Link to={`/applications/${c.application_id}`}>{c.company} — {c.role_title}</Link> {c.external_job_id && `#${c.external_job_id}`} · {c.stage} · score {c.score.toFixed(2)}
+              <div className="muted">{c.reasons.join("; ")}</div>
+            </span>
+          </label>
+        ))}
+        <label className="candidate">
+          <input type="radio" name={`t-${r.id}`} checked={target === "__new__"} onChange={() => setTarget("__new__")} />
+          <span>Create a new application{pc.events.some((e) => e.type.startsWith("application_")) ? " (verified by this acknowledgment)" : " (unverified: no submission evidence)"}</span>
+        </label>
+      </fieldset>
+      <textarea aria-label="Review notes" placeholder="Notes (optional)" value={notes} onChange={(e) => setNotes(e.target.value)} rows={1} />
+      {err && <div className="alert alert-error">{err}</div>}
+      <div className="row">
+        <button className="btn-primary" disabled={!target || approve.isPending} onClick={() => approve.mutate()}>Approve</button>
+        <button className="btn-danger" disabled={reject.isPending} onClick={() => reject.mutate()}>Reject</button>
+        <span className="muted">{r.parser && `Parsed by ${r.parser.model} · prompt ${r.parser.prompt_version}`}</span>
+      </div>
+    </article>
+  );
 }
 
-function draftFrom(s: Suggestion): Draft {
-  return {
-    company: s.company ?? "",
-    title: s.title ?? "",
-    suggested_status: s.suggested_status ?? "",
-  };
+function History() {
+  const qc = useQueryClient();
+  const { data: approved = [] } = useQuery({ queryKey: ["reviews", "approved"], queryFn: () => api.reviews("approved") });
+  const { data: edited = [] } = useQuery({ queryKey: ["reviews", "edited"], queryFn: () => api.reviews("edited") });
+  const { data: rejected = [] } = useQuery({ queryKey: ["reviews", "rejected"], queryFn: () => api.reviews("rejected") });
+  const undo = useMutation({ mutationFn: (id: string) => api.undo(id), onSuccess: () => qc.invalidateQueries() });
+  const rows = [...approved, ...edited, ...rejected].sort((a, b) => (b.reviewed_at ?? "").localeCompare(a.reviewed_at ?? ""));
+  if (rows.length === 0) return <Empty>No reviewed items yet.</Empty>;
+  return (
+    <ul className="stack plain">
+      {rows.slice(0, 50).map((r) => (
+        <li key={r.id} className="card row flex-between">
+          <span>
+            <span className="chip">{r.state}</span> {r.email?.subject} {r.target && <>→ <Link to={`/applications/${r.target.id}`}>{r.target.company}: {r.target.role_title}</Link></>}
+            <span className="muted"> {formatInstant(r.reviewed_at)}</span>
+          </span>
+          <button className="btn-ghost" onClick={() => undo.mutate(r.id)}>Undo</button>
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 export default function ReviewQueue() {
-  const queryClient = useQueryClient();
-  const [selected, setSelected] = useState<Set<number>>(new Set());
-  const [drafts, setDrafts] = useState<Record<number, Draft>>({});
-
-  const { data: suggestions = [], isLoading } = useQuery({
-    queryKey: ["suggestions", "pending"],
-    queryFn: () => api.listSuggestions("pending"),
-  });
-
-  const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ["suggestions"] });
-    queryClient.invalidateQueries({ queryKey: ["applications"] });
-    setSelected(new Set());
-  };
-
-  const getDraft = (s: Suggestion): Draft => drafts[s.id] ?? draftFrom(s);
-
-  const setDraft = (id: number, patch: Partial<Draft>) => {
-    setDrafts((prev) => {
-      const base = prev[id] ?? draftFrom(suggestions.find((x) => x.id === id)!);
-      return { ...prev, [id]: { ...base, ...patch } };
-    });
-  };
-
-  const approve = useMutation({
-    mutationFn: (s: Suggestion) => {
-      const d = getDraft(s);
-      return api.approveSuggestion(s.id, {
-        company: d.company.trim() || null,
-        title: d.title.trim() || null,
-        suggested_status: d.suggested_status || null,
-      });
-    },
-    onSuccess: invalidate,
-  });
-  const reject = useMutation({
-    mutationFn: (id: number) => api.rejectSuggestion(id),
-    onSuccess: invalidate,
-  });
-  const bulkApprove = useMutation({
-    mutationFn: (ids: number[]) => api.bulkApproveSuggestions(ids),
-    onSuccess: invalidate,
-  });
-  const bulkReject = useMutation({
-    mutationFn: (ids: number[]) => api.bulkRejectSuggestions(ids),
-    onSuccess: invalidate,
-  });
-
-  const toggle = (id: number) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
-
-  const allSelected =
-    suggestions.length > 0 && selected.size === suggestions.length;
-
+  const [tab, setTab] = useState<"pending" | "history">("pending");
+  const { data, error, isLoading } = useQuery({ queryKey: ["reviews", "pending"], queryFn: () => api.reviews("pending"), refetchInterval: 60000 });
   return (
-    <div>
+    <div className="stack">
       <div className="page-header">
-        <div>
-          <h1 className="page-title">Review Queue</h1>
-          <p className="subtitle">
-            Email-detected updates awaiting your approval, oldest email first so
-            approving in order rebuilds each timeline correctly. Edit company,
-            title, or status before approving.
-          </p>
-        </div>
-        {suggestions.length > 0 && (
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button
-              className="btn-secondary"
-              onClick={() =>
-                setSelected(
-                  allSelected
-                    ? new Set()
-                    : new Set(suggestions.map((s) => s.id))
-                )
-              }
-            >
-              {allSelected ? "Clear selection" : "Select all"}
-            </button>
-            <button
-              className="btn-secondary"
-              disabled={selected.size === 0 || bulkReject.isPending}
-              onClick={() => bulkReject.mutate([...selected])}
-            >
-              Dismiss selected
-            </button>
-            <button
-              className="btn-primary"
-              disabled={selected.size === 0 || bulkApprove.isPending}
-              onClick={() => bulkApprove.mutate([...selected])}
-            >
-              Approve selected
-            </button>
-          </div>
-        )}
+        <h1 className="page-title">Review queue</h1>
+        <p className="subtitle">Uncertain matches, terminal decisions, ambiguous deadlines and unknown applications wait here. Nothing is applied until you approve.</p>
       </div>
-
-      {isLoading ? (
-        <div className="empty">Loading...</div>
-      ) : suggestions.length === 0 ? (
-        <div className="empty">
-          <p>Nothing to review.</p>
-          <p className="muted">
-            When monitored inboxes receive job-related emails, suggested updates
-            will appear here.
-          </p>
-        </div>
-      ) : (
-        <div className="grid-cards">
-          {suggestions.map((s) => {
-            const d = getDraft(s);
-            return (
-              <div className="card" key={s.id}>
-                <div className="flex-between">
-                  <label
-                    className="switch-row"
-                    style={{ gap: 8, cursor: "pointer" }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selected.has(s.id)}
-                      onChange={() => toggle(s.id)}
-                    />
-                    <span className="badge">{kindLabel(s)}</span>
-                  </label>
-                  <span
-                    className="muted"
-                    style={{ fontSize: 12, display: "flex", gap: 8 }}
-                  >
-                    {emailDateLabel(s) && <span>{emailDateLabel(s)}</span>}
-                    {s.confidence != null && <span>{s.confidence}%</span>}
-                  </span>
-                </div>
-
-                {s.summary && (
-                  <p style={{ marginTop: 12, lineHeight: 1.5 }}>{s.summary}</p>
-                )}
-
-                <div className="row" style={{ marginTop: 12, gap: 10 }}>
-                  <div className="field" style={{ flex: 1, margin: 0 }}>
-                    <label>Company</label>
-                    <input
-                      value={d.company}
-                      onChange={(e) =>
-                        setDraft(s.id, { company: e.target.value })
-                      }
-                      placeholder="Company"
-                    />
-                  </div>
-                  <div className="field" style={{ flex: 1, margin: 0 }}>
-                    <label>Title</label>
-                    <input
-                      value={d.title}
-                      onChange={(e) =>
-                        setDraft(s.id, { title: e.target.value })
-                      }
-                      placeholder="Role title"
-                    />
-                  </div>
-                </div>
-                <div className="field" style={{ marginTop: 10 }}>
-                  <label>Status</label>
-                  <select
-                    value={d.suggested_status}
-                    onChange={(e) =>
-                      setDraft(s.id, {
-                        suggested_status: e.target
-                          .value as ApplicationStatus | "",
-                      })
-                    }
-                  >
-                    <option value="">No status change</option>
-                    {STATUSES.map((st) => (
-                      <option key={st} value={st}>
-                        {STATUS_LABELS[st]}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div
-                  className="card"
-                  style={{ background: "var(--bg)", marginTop: 8, padding: 12 }}
-                >
-                  <div style={{ fontSize: 13 }}>
-                    <strong>{s.email_subject || "(no subject)"}</strong>
-                  </div>
-                  <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
-                    {s.email_sender}
-                  </div>
-                  {s.email_snippet && (
-                    <p
-                      className="muted"
-                      style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}
-                    >
-                      {s.email_snippet.slice(0, 220)}
-                      {s.email_snippet.length > 220 ? "…" : ""}
-                    </p>
-                  )}
-                </div>
-
-                <div className="modal-actions" style={{ marginTop: 14 }}>
-                  <button
-                    className="btn-secondary"
-                    onClick={() => reject.mutate(s.id)}
-                    disabled={reject.isPending}
-                  >
-                    Dismiss
-                  </button>
-                  <button
-                    className="btn-primary"
-                    onClick={() => approve.mutate(s)}
-                    disabled={approve.isPending}
-                  >
-                    Approve
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+      <div className="tabs" role="tablist">
+        <button role="tab" aria-selected={tab === "pending"} className={`tab ${tab === "pending" ? "active" : ""}`} onClick={() => setTab("pending")}>Pending {data ? `(${data.length})` : ""}</button>
+        <button role="tab" aria-selected={tab === "history"} className={`tab ${tab === "history" ? "active" : ""}`} onClick={() => setTab("history")}>Reviewed</button>
+      </div>
+      {tab === "history" ? <History /> : (
+        <>
+          {isLoading && <Loading />}
+          {error && <ErrorBox error={error} />}
+          {data && data.length === 0 && <Empty>Nothing to review.</Empty>}
+          {data?.map((r) => <ReviewCard key={r.id} r={r} />)}
+        </>
       )}
     </div>
   );

@@ -19,7 +19,9 @@ salary, skills, or listing URL — so those fields stay empty unless entered by 
 
 ## Other backlog
 
-- Interview calendar (.ics) export
+- ~~Interview calendar (.ics) export~~ (done: Import / export → Deadlines .ics)
 - Resume-tailoring suggestions per listing
 - Slack/Discord notifications
-- Optional auth for hosted deployments
+- Optional auth for hosted deployments (required before any remote access; see README security notes)
+- Measure Qwen3-4B accuracy on the synthetic corpus (`make eval`) and grow the fixture set from real (anonymized) formats
+- Business-day calendars per employer (today: always human review)

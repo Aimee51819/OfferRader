@@ -1,10 +1,20 @@
+# Optional. Local-first (no Docker) is the default; see README.
+# The UI/API is published on 127.0.0.1 only. ALLOW_NON_LOOPBACK is needed because
+# nginx reaches the backend from another container on the private compose network.
+# Ollama runs on the Mac host (Metal acceleration); the backend reaches it via
+# host.docker.internal.
 services:
   backend:
     build: ./backend
+    env_file:
+      - path: ./backend/.env
+        required: false
     environment:
       DATA_DIR: /data
       FRONTEND_ORIGIN: http://localhost:8080
-      EMAIL_POLL_INTERVAL_SECONDS: "300"
+      ALLOW_NON_LOOPBACK: "true"
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      OAUTH_REDIRECT_BASE: http://127.0.0.1:8080
     volumes:
       - tracker-data:/data
     restart: unless-stopped
@@ -12,7 +22,7 @@ services:
   frontend:
     build: ./frontend
     ports:
-      - "8080:80"
+      - "127.0.0.1:8080:80"
     depends_on:
       - backend
     restart: unless-stopped

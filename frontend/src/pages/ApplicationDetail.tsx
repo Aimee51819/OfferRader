@@ -1,265 +1,205 @@
+import { useState } from "react";
+import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { ApplicationStatus } from "../api/types";
-import { STATUSES, STATUS_LABELS } from "../lib/statuses";
-import StatusBadge from "../components/StatusBadge";
+import type { ActionItem, Stage } from "../api/types";
+import { EvidenceBadge, StageBadge, UrgencyBadge } from "../components/Badges";
+import Modal from "../components/Modal";
+import { ErrorBox, Loading } from "../components/States";
+import { STAGES, STAGE_LABELS, describeDue, eventLabel, evidenceLabel, formatDay, formatInstant } from "../lib/format";
+
+function DeadlineEditor({ item, onClose }: { item: ActionItem; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [mode, setMode] = useState<"instant" | "day">(item.due_at ? "instant" : "day");
+  const [value, setValue] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const save = useMutation({
+    mutationFn: () => {
+      if (mode === "day") return api.editActionItem(item.id, { due_date: value, due_at: null });
+      // datetime-local has no zone: interpret it explicitly as Eastern Time.
+      return api.editActionItem(item.id, { due_at: easternLocalToIso(value), due_date: null });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries();
+      onClose();
+    },
+    onError: (e) => setErr(String(e)),
+  });
+  return (
+    <Modal title="Set deadline" onClose={onClose}>
+      <p className="muted">Original wording: “{item.due_expression_raw ?? "none"}”</p>
+      <div className="row">
+        <label><input type="radio" checked={mode === "day"} onChange={() => setMode("day")} /> Date only</label>
+        <label><input type="radio" checked={mode === "instant"} onChange={() => setMode("instant")} /> Date and time (Eastern)</label>
+      </div>
+      <input aria-label="New deadline" type={mode === "day" ? "date" : "datetime-local"} value={value} onChange={(e) => setValue(e.target.value)} />
+      {err && <div className="alert alert-error">{err}</div>}
+      <div className="modal-actions">
+        <button className="btn-primary" disabled={!value || save.isPending} onClick={() => save.mutate()}>Save</button>
+      </div>
+    </Modal>
+  );
+}
+
+/** Convert 'YYYY-MM-DDTHH:mm' wall-clock in America/New_York to an ISO instant (DST-aware). */
+export function easternLocalToIso(local: string): string {
+  const [d, t] = local.split("T");
+  const [y, m, day] = d.split("-").map(Number);
+  const [hh, mm] = t.split(":").map(Number);
+  let guess = Date.UTC(y, m - 1, day, hh, mm);
+  for (let i = 0; i < 2; i++) {
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })
+      .formatToParts(new Date(guess))
+      .reduce<Record<string, string>>((acc, p) => ({ ...acc, [p.type]: p.value }), {});
+    const shown = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour % 24, +parts.minute);
+    guess += Date.UTC(y, m - 1, day, hh, mm) - shown;
+  }
+  return new Date(guess).toISOString();
+}
 
 export default function ApplicationDetail() {
-  const { id } = useParams();
-  const appId = Number(id);
-  const navigate = useNavigate();
-  const queryClient = useQueryClient();
+  const { id = "" } = useParams();
+  const qc = useQueryClient();
+  const { data: app, error, isLoading } = useQuery({ queryKey: ["application", id], queryFn: () => api.application(id) });
+  const [stage, setStage] = useState<Stage | "">("");
+  const [lock, setLock] = useState(false);
+  const [note, setNote] = useState("");
+  const [editing, setEditing] = useState<ActionItem | null>(null);
+  const refresh = () => qc.invalidateQueries();
+  const stageMut = useMutation({ mutationFn: () => api.setStage(id, { stage: stage as Stage, lock }), onSuccess: refresh });
+  const noteMut = useMutation({ mutationFn: () => api.addNote(id, note), onSuccess: () => { setNote(""); refresh(); } });
+  const submitMut = useMutation({ mutationFn: () => api.updateApplication(id, { confirmed_submitted: true }), onSuccess: refresh });
+  const itemMut = useMutation({ mutationFn: (p: { id: string; state: string }) => api.editActionItem(p.id, { state: p.state }), onSuccess: refresh });
+  const oaMut = useMutation({ mutationFn: (aid: string) => api.completeAssessment(aid), onSuccess: refresh });
 
-  const { data: app, isLoading } = useQuery({
-    queryKey: ["application", appId],
-    queryFn: () => api.getApplication(appId),
-    enabled: !!appId,
-  });
-
-  const statusMutation = useMutation({
-    mutationFn: (status: ApplicationStatus) => api.updateStatus(appId, status),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["application", appId] });
-      queryClient.invalidateQueries({ queryKey: ["applications"] });
-      queryClient.invalidateQueries({ queryKey: ["reminders"] });
-    },
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: () => api.deleteApplication(appId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["applications"] });
-      navigate("/");
-    },
-  });
-
-  if (isLoading || !app) return <div className="empty">Loading...</div>;
-
-  const skills = app.skills
-    ? app.skills.split(",").map((s) => s.trim()).filter(Boolean)
-    : [];
+  if (isLoading) return <Loading />;
+  if (error) return <ErrorBox error={error} />;
+  if (!app) return null;
 
   return (
-    <div>
+    <div className="stack">
       <div className="page-header">
-        <div>
-          <button className="btn-ghost" onClick={() => navigate("/")}>
-            ← Back
-          </button>
-          <h1 className="page-title" style={{ marginTop: 6 }}>
-            {app.title}
-          </h1>
-          <p className="subtitle">
-            {app.company}
-            {app.location ? ` · ${app.location}` : ""}
-          </p>
-        </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button
-            className="btn-primary"
-            onClick={() => navigate(`/applications/${appId}/edit`)}
-          >
-            Edit
-          </button>
-          <button
-            className="btn-danger"
-            onClick={() => {
-              if (confirm("Delete this application?")) deleteMutation.mutate();
-            }}
-          >
-            Delete
-          </button>
+        <Link to="/" className="muted">← Dashboard</Link>
+        <h1 className="page-title">{app.company} — {app.role_title}</h1>
+        <div className="row">
+          <StageBadge stage={app.stage} locked={app.manual_stage_lock} />
+          <EvidenceBadge verified={app.verified} type={app.submission_evidence_type} />
+          {app.external_job_id && <span className="chip">Req {app.external_job_id}</span>}
+          {app.recruiting_cycle && <span className="chip">{app.recruiting_cycle}</span>}
+          {app.category && <span className="chip">{app.category}</span>}
+          {app.ats_platform && <span className="chip">{app.ats_platform}</span>}
         </div>
       </div>
 
-      {statusMutation.isError && (
-        <div className="alert alert-error">
-          {(statusMutation.error as Error).message}
+      <div className="two-col">
+        <div className="card">
+          <h3 className="card-title">Submission</h3>
+          <dl className="facts">
+            <dt>Applied</dt><dd>{app.submitted_at ? formatInstant(app.submitted_at) : "Not recorded"}</dd>
+            <dt>Evidence</dt><dd>{evidenceLabel(app.submission_evidence_type)}</dd>
+            <dt>Acknowledged</dt><dd>{app.acknowledged_at ? formatInstant(app.acknowledged_at) : "—"}</dd>
+            <dt>Channel</dt><dd>{app.application_channel ?? "—"}</dd>
+            <dt>Resume</dt><dd>{app.resume_label ?? "—"}</dd>
+            <dt>Posting</dt>
+            <dd>{app.posting_url ? <a href={app.posting_url} target="_blank" rel="noopener noreferrer nofollow">{app.posting_url}</a> : "—"}</dd>
+          </dl>
+          {!app.verified && (
+            <button className="btn-secondary" onClick={() => submitMut.mutate()}>I submitted this application</button>
+          )}
+        </div>
+        <div className="card">
+          <h3 className="card-title">Change stage</h3>
+          <div className="row">
+            <select aria-label="New stage" value={stage} onChange={(e) => setStage(e.target.value as Stage)}>
+              <option value="">Choose…</option>
+              {STAGES.map((s) => <option key={s} value={s}>{STAGE_LABELS[s]}</option>)}
+            </select>
+            <label className="row"><input type="checkbox" checked={lock} onChange={(e) => setLock(e.target.checked)} /> Pin (email can't change it)</label>
+            <button className="btn-primary" disabled={!stage} onClick={() => stageMut.mutate()}>Apply</button>
+          </div>
+          <h3 className="card-title">Notes</h3>
+          <p className="pre">{app.notes || <span className="muted">No notes.</span>}</p>
+          <textarea aria-label="Add note" value={note} onChange={(e) => setNote(e.target.value)} rows={2} />
+          <button className="btn-secondary" disabled={!note.trim()} onClick={() => noteMut.mutate()}>Add note</button>
+        </div>
+      </div>
+
+      <div className="card">
+        <h3 className="card-title">Actions & deadlines</h3>
+        {app.action_items.length === 0 ? <p className="muted">None.</p> : (
+          <ul className="stack plain">
+            {app.action_items.map((i) => (
+              <li key={i.id} className={`deadline-row ${i.state !== "open" && i.state !== "needs_review" ? "muted" : ""}`}>
+                <div className="flex-between">
+                  <span><strong>{i.title}</strong> · {i.state}</span>
+                  <UrgencyBadge urgency={i.urgency} />
+                </div>
+                <div>{describeDue(i)}</div>
+                {i.due_expression_raw && <blockquote className="evidence">“{i.due_expression_raw}”</blockquote>}
+                {i.deadline_assumption && <div className="muted">{i.deadline_assumption}</div>}
+                {(i.state === "open" || i.state === "needs_review") && (
+                  <div className="row">
+                    <button className="btn-secondary" onClick={() => itemMut.mutate({ id: i.id, state: "completed" })}>Done</button>
+                    <button className="btn-ghost" onClick={() => setEditing(i)}>{i.state === "needs_review" ? "Confirm deadline" : "Edit deadline"}</button>
+                    <button className="btn-ghost" onClick={() => itemMut.mutate({ id: i.id, state: "cancelled" })}>Not needed</button>
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <div className="two-col">
+        <div className="card">
+          <h3 className="card-title">Assessments</h3>
+          {app.assessments.length === 0 ? <p className="muted">None.</p> : app.assessments.map((a) => (
+            <div key={a.id} className="row">
+              <span>{a.provider ?? "Assessment"} ({a.assessment_type}) — {a.state}, invited {formatDay(a.invited_at)}</span>
+              {(a.state === "invited" || a.state === "started") && (
+                <button className="btn-secondary" onClick={() => oaMut.mutate(a.id)}>Mark OA completed</button>
+              )}
+            </div>
+          ))}
+        </div>
+        <div className="card">
+          <h3 className="card-title">Interviews</h3>
+          {app.interviews.length === 0 ? <p className="muted">None.</p> : app.interviews.map((iv) => (
+            <div key={iv.id}>{iv.round_label ?? "Interview"} — {iv.state} — {iv.starts_at ? formatInstant(iv.starts_at) : "time not set"}</div>
+          ))}
+        </div>
+      </div>
+
+      <div className="card">
+        <h3 className="card-title">Timeline</h3>
+        <ol className="timeline">
+          {app.events.map((e) => (
+            <li key={e.id} className={e.event_type === "undo" ? "muted" : ""}>
+              <div>
+                <strong>{eventLabel(e.event_type)}</strong> <span className="muted">{formatInstant(e.event_at)} · {e.source} · {e.actor}</span>
+              </div>
+              <div>{e.description}</div>
+              {e.evidence_quote && <blockquote className="evidence">“{e.evidence_quote}”</blockquote>}
+              {e.supersedes_event_id && <div className="muted">Corrects an earlier entry.</div>}
+            </li>
+          ))}
+        </ol>
+      </div>
+
+      {app.evidence.length > 0 && (
+        <div className="card">
+          <h3 className="card-title">Source emails</h3>
+          {app.evidence.map((m) => (
+            <details key={m.email_message_id}>
+              <summary>{formatDay(m.received_at)} — {m.subject} <span className="muted">({m.sender})</span></summary>
+              {/* Plain text only; email HTML is never rendered. */}
+              <pre className="email-excerpt">{m.excerpt}</pre>
+              {m.web_link && <a href={m.web_link} target="_blank" rel="noopener noreferrer nofollow">Open in mailbox ↗</a>}
+            </details>
+          ))}
         </div>
       )}
-
-      <div className="row" style={{ alignItems: "flex-start" }}>
-        <div className="stack" style={{ flex: 1.4 }}>
-          <div className="card">
-            <div className="flex-between" style={{ marginBottom: 14 }}>
-              <strong>Status</strong>
-              <StatusBadge status={app.status} />
-            </div>
-            <select
-              value={app.status}
-              onChange={(e) =>
-                statusMutation.mutate(e.target.value as ApplicationStatus)
-              }
-            >
-              {STATUSES.map((s) => (
-                <option key={s} value={s}>
-                  {STATUS_LABELS[s]}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="card">
-            <strong>Details</strong>
-            <div style={{ marginTop: 12 }} className="stack">
-              <div className="flex-between">
-                <span className="muted">Company</span>
-                <span>{app.company}</span>
-              </div>
-              <div className="flex-between">
-                <span className="muted">Title</span>
-                <span>{app.title}</span>
-              </div>
-              {app.job_id && (
-                <div className="flex-between">
-                  <span className="muted">Job / req ID</span>
-                  <span>{app.job_id}</span>
-                </div>
-              )}
-              {app.location && (
-                <div className="flex-between">
-                  <span className="muted">Location</span>
-                  <span>{app.location}</span>
-                </div>
-              )}
-              {app.salary && (
-                <div className="flex-between">
-                  <span className="muted">Salary</span>
-                  <span>{app.salary}</span>
-                </div>
-              )}
-              {app.source && (
-                <div className="flex-between">
-                  <span className="muted">Source</span>
-                  <span>{app.source}</span>
-                </div>
-              )}
-              {app.url && (
-                <div className="flex-between">
-                  <span className="muted">Link</span>
-                  <a href={app.url} target="_blank" rel="noreferrer">
-                    Open listing
-                  </a>
-                </div>
-              )}
-              {app.contact_email && (
-                <div className="flex-between">
-                  <span className="muted">Contact</span>
-                  <span>{app.contact_email}</span>
-                </div>
-              )}
-            </div>
-            {skills.length > 0 && (
-              <div style={{ marginTop: 14 }}>
-                <div className="muted" style={{ marginBottom: 8 }}>
-                  Skills
-                </div>
-                <div className="chips">
-                  {skills.map((s) => (
-                    <span className="chip" key={s}>
-                      {s}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-            {app.description && (
-              <div style={{ marginTop: 14 }}>
-                <div className="muted" style={{ marginBottom: 6 }}>
-                  Description
-                </div>
-                <p style={{ margin: 0, lineHeight: 1.6 }}>{app.description}</p>
-              </div>
-            )}
-          </div>
-
-          <div className="card">
-            <strong>Private notes</strong>
-            {app.notes ? (
-              <p style={{ marginTop: 10, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
-                {app.notes}
-              </p>
-            ) : (
-              <p className="muted" style={{ marginTop: 10 }}>
-                No notes yet. Use Edit to add some.
-              </p>
-            )}
-          </div>
-        </div>
-
-        <div className="stack" style={{ flex: 1 }}>
-          <div className="card">
-            <strong>Status timeline</strong>
-            <ul className="timeline" style={{ marginTop: 12 }}>
-              {app.events.length === 0 && (
-                <li className="muted">No activity yet.</li>
-              )}
-              {app.events.map((ev) => (
-                <li key={ev.id}>
-                  <div className="flex-between">
-                    <span>
-                      {ev.from_status &&
-                      ev.to_status &&
-                      ev.from_status !== ev.to_status
-                        ? `${STATUS_LABELS[ev.from_status]} → ${STATUS_LABELS[ev.to_status]}`
-                        : ev.to_status
-                          ? STATUS_LABELS[ev.to_status]
-                          : "Update"}
-                    </span>
-                    <span className="pill-source">{ev.source}</span>
-                  </div>
-                  {ev.note && (
-                    <div className="muted" style={{ marginTop: 4 }}>
-                      {ev.note}
-                    </div>
-                  )}
-                  <div className="time">
-                    {new Date(ev.created_at).toLocaleString()}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          <div className="card">
-            <strong>Email timeline</strong>
-            <p className="muted" style={{ fontSize: 13, margin: "6px 0 0" }}>
-              Related inbox messages for {app.company}.
-            </p>
-            <ul className="timeline" style={{ marginTop: 12 }}>
-              {(app.related_emails?.length ?? 0) === 0 && (
-                <li className="muted">No related emails yet.</li>
-              )}
-              {(app.related_emails ?? []).map((em) => (
-                <li key={`${em.kind}-${em.id}`}>
-                  <div className="flex-between">
-                    <span style={{ fontWeight: 600 }}>
-                      {em.subject || "(no subject)"}
-                    </span>
-                    <span className="pill-source">
-                      {em.kind === "suggestion" ? "suggestion" : "email"}
-                    </span>
-                  </div>
-                  {em.sender && (
-                    <div className="muted" style={{ marginTop: 2, fontSize: 12 }}>
-                      {em.sender}
-                    </div>
-                  )}
-                  {(em.summary || em.snippet) && (
-                    <div className="muted" style={{ marginTop: 4 }}>
-                      {(em.summary || em.snippet || "").slice(0, 200)}
-                    </div>
-                  )}
-                  <div className="time">
-                    {new Date(em.created_at).toLocaleString()}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </div>
-      </div>
+      {editing && <DeadlineEditor item={editing} onClose={() => setEditing(null)} />}
     </div>
   );
 }

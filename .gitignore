@@ -41,3 +41,9 @@ backend/assets/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Feedback agent: local artifacts
+backend/demo-data/
+eval-report.json
+body_cache/
+backups/

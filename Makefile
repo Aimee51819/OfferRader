@@ -12,7 +12,7 @@ endif
 .DEFAULT_GOAL := help
 
 .PHONY: help setup install-backend install-frontend backend frontend dev \
-        build app dist docker-up docker-down clean
+        build app dist docker-up docker-down clean test migrate demo eval check-ollama
 
 help: ## Show this help
 	@echo Job Application Tracker - available commands:
@@ -26,13 +26,18 @@ help: ## Show this help
 	@echo   make docker-up   Start everything with Docker Compose
 	@echo   make docker-down Stop the Docker Compose stack
 	@echo   make clean       Remove venv, node_modules and build artifacts
+	@echo   make test        Run backend + frontend tests
+	@echo   make migrate     Back up and upgrade the local database
+	@echo   make demo        Load synthetic demo mail (separate DATA_DIR recommended)
+	@echo   make eval        Score the local Qwen model on the synthetic corpus
+	@echo   make check-ollama  Verify Ollama and the configured model tag
 
 setup: install-backend install-frontend ## Install all dependencies
 
 install-backend: ## Create venv and install backend deps
 	$(PYTHON) -m venv backend/.venv
 	$(VENV_BIN)/python -m pip install --upgrade pip
-	$(VENV_BIN)/python -m pip install -r backend/requirements.txt
+	$(VENV_BIN)/python -m pip install -r backend/requirements-dev.txt
 
 install-frontend: ## Install frontend deps
 	cd frontend && npm install
@@ -65,3 +70,19 @@ docker-down: ## Stop the Docker stack
 
 clean: ## Remove dependencies and build artifacts
 	rm -rf backend/.venv backend/__pycache__ frontend/node_modules frontend/dist frontend/dist-types build dist *.spec.bak
+
+test: ## Backend + frontend tests
+	cd backend && .venv/bin/python -m pytest -q
+	cd frontend && npm run test
+
+migrate: ## Back up + upgrade the database schema
+	cd backend && .venv/bin/python -m app.cli migrate
+
+demo: ## Load the synthetic demo (use DATA_DIR=... to keep it apart from real data)
+	cd backend && .venv/bin/python -m app.cli demo --reset
+
+eval: ## Evaluate the local Qwen model on synthetic fixtures
+	cd backend && .venv/bin/python -m app.cli eval --backend ollama --json ../eval-report.json
+
+check-ollama: ## Check Ollama + model
+	cd backend && .venv/bin/python -m app.cli check-ollama

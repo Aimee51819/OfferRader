@@ -15,3 +15,4 @@ pystray==0.19.5
 Pillow==11.1.0
 # Optional: store the encryption key in the macOS Keychain
 keyring==25.5.0
+tzdata==2024.2

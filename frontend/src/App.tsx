@@ -2,39 +2,15 @@ import { useEffect, useRef } from "react";
 import { NavLink, Route, Routes } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "./api/client";
-import Dashboard from "./pages/Dashboard";
 import AddApplication from "./pages/AddApplication";
-import ApplicationDetail from "./pages/ApplicationDetail";
-import EditApplication from "./pages/EditApplication";
 import Analytics from "./pages/Analytics";
+import ApplicationDetail from "./pages/ApplicationDetail";
+import Dashboard from "./pages/Dashboard";
+import Deadlines from "./pages/Deadlines";
+import ImportExport from "./pages/ImportExport";
 import ReviewQueue from "./pages/ReviewQueue";
-import FollowUps from "./pages/FollowUps";
 import Settings from "./pages/Settings";
-
-function SyncToast() {
-  const { data: progress } = useQuery({
-    queryKey: ["syncProgress"],
-    queryFn: () => api.getSyncProgress(),
-    refetchInterval: (q) => (q.state.data?.running ? 700 : 5000),
-  });
-
-  if (!progress) return null;
-  if (!progress.running && progress.phase !== "error") return null;
-
-  return (
-    <div
-      className={`sync-toast ${progress.phase === "error" ? "sync-toast-error" : ""}`}
-    >
-      {progress.message || (progress.running ? "Syncing inbox…" : "Sync error")}
-      {progress.running && progress.total > 0 && (
-        <span>
-          {" "}
-          ({progress.current}/{progress.total})
-        </span>
-      )}
-    </div>
-  );
-}
+import { describeDue } from "./lib/format";
 
 function BrandMark() {
   return (
@@ -47,67 +23,62 @@ function BrandMark() {
   );
 }
 
-function Sidebar() {
-  const { data: suggestions } = useQuery({
-    queryKey: ["suggestions", "pending"],
-    queryFn: () => api.listSuggestions("pending"),
-    refetchInterval: 60000,
-  });
-  const pendingCount = suggestions?.length ?? 0;
-
-  const { data: reminders = [] } = useQuery({
-    queryKey: ["reminders"],
-    queryFn: () => api.listReminders(),
-    refetchInterval: 120000,
-  });
-  const reminderCount = reminders.length;
-
-  // Notify when new email-detected suggestions appear.
-  const prevCount = useRef<number | null>(null);
+/** Shows reminder banners from the local reminder log; optional browser notification. */
+function Reminders() {
+  const { data = [] } = useQuery({ queryKey: ["notifications"], queryFn: api.notifications, refetchInterval: 60000 });
+  const seen = useRef<Set<string>>(new Set());
   useEffect(() => {
-    if (prevCount.current !== null && pendingCount > prevCount.current) {
-      const delta = pendingCount - prevCount.current;
-      if (
-        typeof Notification !== "undefined" &&
-        Notification.permission === "granted"
-      ) {
-        new Notification("Job Application Tracker", {
-          body: `${delta} new job email${delta === 1 ? "" : "s"} to review.`,
-        });
+    for (const n of data) {
+      if (seen.current.has(n.id)) continue;
+      seen.current.add(n.id);
+      if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+        new Notification(n.action_item.title, { body: `${n.action_item.company}: due ${describeDue(n.action_item)}` });
       }
     }
-    prevCount.current = pendingCount;
-  }, [pendingCount]);
+  }, [data]);
+  if (data.length === 0) return null;
+  return (
+    <div className="reminders" role="region" aria-label="Reminders">
+      {data.slice(0, 3).map((n) => (
+        <div key={n.id} className="alert alert-warn flex-between">
+          <span>
+            ⏰ <strong>{n.action_item.title}</strong> — {n.action_item.company}: {n.action_item.role_title}. Due {describeDue(n.action_item)}
+          </span>
+          <button className="btn-ghost" onClick={() => api.dismissNotification(n.id)}>Dismiss</button>
+        </div>
+      ))}
+    </div>
+  );
+}
 
+function Sidebar() {
+  const { data: summary } = useQuery({ queryKey: ["summary"], queryFn: api.summary, refetchInterval: 60000 });
+  const reviewCount = summary?.review_needed ?? 0;
+  const urgent = (summary?.overdue ?? 0) + (summary?.deadlines_within_72h ?? 0);
   return (
     <aside className="sidebar">
       <div className="brand">
         <BrandMark />
         AppTracker
       </div>
-
-      <NavLink to="/" end className="nav-link">
-        Dashboard
-      </NavLink>
-      <NavLink to="/add" className="nav-link">
-        Add Application
-      </NavLink>
-      <NavLink to="/analytics" className="nav-link">
-        Analytics
-      </NavLink>
-      <NavLink to="/review" className="nav-link">
-        Review Queue
-        {pendingCount > 0 && <span className="nav-badge">{pendingCount}</span>}
-      </NavLink>
-      <NavLink to="/follow-ups" className="nav-link">
-        Follow-ups
-        {reminderCount > 0 && <span className="nav-badge">{reminderCount}</span>}
-      </NavLink>
-      <NavLink to="/settings" className="nav-link">
-        Settings
-      </NavLink>
-
+      <nav aria-label="Main">
+        <NavLink to="/" end className="nav-link">Dashboard</NavLink>
+        <NavLink to="/deadlines" className="nav-link">
+          Deadlines {urgent > 0 && <span className="nav-badge">{urgent}</span>}
+        </NavLink>
+        <NavLink to="/review" className="nav-link">
+          Review queue {reviewCount > 0 && <span className="nav-badge">{reviewCount}</span>}
+        </NavLink>
+        <NavLink to="/add" className="nav-link">Add application</NavLink>
+        <NavLink to="/analytics" className="nav-link">Funnel</NavLink>
+        <NavLink to="/import" className="nav-link">Import / export</NavLink>
+        <NavLink to="/settings" className="nav-link">Settings</NavLink>
+      </nav>
       <div className="spacer" />
+      {typeof Notification !== "undefined" && Notification.permission === "default" && (
+        <button className="btn-ghost" onClick={() => Notification.requestPermission()}>Enable browser reminders</button>
+      )}
+      <div className="muted small">Local only · read-only mail · no auto-apply</div>
     </aside>
   );
 }
@@ -117,15 +88,15 @@ export default function App() {
     <div className="app-shell">
       <Sidebar />
       <main className="content">
-        <SyncToast />
+        <Reminders />
         <Routes>
           <Route path="/" element={<Dashboard />} />
+          <Route path="/deadlines" element={<Deadlines />} />
+          <Route path="/review" element={<ReviewQueue />} />
           <Route path="/add" element={<AddApplication />} />
           <Route path="/analytics" element={<Analytics />} />
+          <Route path="/import" element={<ImportExport />} />
           <Route path="/applications/:id" element={<ApplicationDetail />} />
-          <Route path="/applications/:id/edit" element={<EditApplication />} />
-          <Route path="/review" element={<ReviewQueue />} />
-          <Route path="/follow-ups" element={<FollowUps />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>
       </main>

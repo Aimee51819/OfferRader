@@ -5,16 +5,9 @@ function setStatus(msg, kind) {
   el.classList.toggle("hidden", !msg);
 }
 
-// Runs in the page context to extract the listing text.
+// Runs in the page context. Only the title and URL are used; page text stays in the browser.
 function extractPageContent() {
-  const selection = window.getSelection ? String(window.getSelection()) : "";
-  const body = document.body ? document.body.innerText : "";
-  const text = (selection && selection.trim().length > 40 ? selection : body) || "";
-  return {
-    title: document.title || "",
-    url: window.location.href,
-    text: text.slice(0, 12000),
-  };
+  return { title: document.title || "", url: window.location.href };
 }
 
 let parsed = null;
@@ -29,29 +22,14 @@ async function capture() {
       target: { tabId: tab.id },
       func: extractPageContent,
     });
-
-    const backend = await resolveBackend();
-    setStatus("Parsing with AI...", null);
-    const res = await fetch(`${backend}/api/parse`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        text: `${result.title}\n${result.url}\n\n${result.text}`,
-      }),
-    });
-    if (!res.ok) {
-      const detail = await res.json().catch(() => ({}));
-      throw new Error(detail.detail || `Parse failed (${res.status})`);
-    }
-    parsed = await res.json();
-    parsed.url = parsed.url || result.url;
-
-    document.getElementById("company").value = parsed.company || "";
-    document.getElementById("title").value = parsed.title || "";
-    document.getElementById("location").value = parsed.location || "";
-    document.getElementById("salary").value = parsed.salary || "";
+    parsed = { url: result.url };
+    // Common title shapes: "Role - Company | Board" / "Role at Company".
+    const parts = (result.title || "").split(/\s[|–—-]\s|\sat\s/);
+    document.getElementById("title").value = (parts[0] || "").trim();
+    document.getElementById("company").value = (parts[1] || "").trim();
+    document.getElementById("location").value = "";
     document.getElementById("preview").classList.remove("hidden");
-    setStatus("Review and save.", "success");
+    setStatus("Check the company and exact role title, then save.", "success");
   } catch (e) {
     setStatus(e.message || "Something went wrong.", "error");
   } finally {
@@ -64,27 +42,40 @@ async function save() {
   saveBtn.disabled = true;
   try {
     const backend = await resolveBackend();
-    const payload = {
-      company: document.getElementById("company").value || "Unknown",
-      title: document.getElementById("title").value || "Unknown",
-      location: document.getElementById("location").value || null,
-      salary: document.getElementById("salary").value || null,
-      url: (parsed && parsed.url) || null,
-      source: (parsed && parsed.source) || "Browser extension",
-      description: (parsed && parsed.description) || null,
-      skills: parsed && parsed.skills ? parsed.skills.join(", ") : null,
-      status: "saved",
-    };
+    const company = document.getElementById("company").value.trim();
+    const role = document.getElementById("title").value.trim();
+    if (!company || !role) throw new Error("Company and role are required.");
+    const url = (parsed && parsed.url) || null;
+    const check = await fetch(`${backend}/api/duplicates/check`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ company, role_title: role, posting_url: url, recruiting_cycle: "Summer 2027" }),
+    }).then((r) => r.json());
+    if (check.decision === "BLOCK") {
+      throw new Error("Already tracked or applied: " + (check.reasons[0] || "same opening"));
+    }
+    if (check.decision === "WARN" && !confirm("Heads up:\n" + check.reasons.join("\n") + "\n\nSave anyway?")) {
+      setStatus("Not saved.", null);
+      return;
+    }
+    // Saved as "Tracked" (not applied). Mark it submitted in the app after you really apply.
     const res = await fetch(`${backend}/api/applications`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        company,
+        role_title: role,
+        location: document.getElementById("location").value || null,
+        posting_url: url,
+        recruiting_cycle: "Summer 2027",
+      }),
     });
     if (!res.ok) {
       const detail = await res.json().catch(() => ({}));
-      throw new Error(detail.detail || `Save failed (${res.status})`);
+      const msg = (detail.detail && detail.detail.message) || detail.detail || `Save failed (${res.status})`;
+      throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
     }
-    setStatus("Saved to your tracker!", "success");
+    setStatus("Saved as Tracked.", "success");
     document.getElementById("preview").classList.add("hidden");
   } catch (e) {
     setStatus(e.message || "Could not save.", "error");

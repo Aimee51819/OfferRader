@@ -95,6 +95,8 @@ class Settings(BaseSettings):
     # Loopback only by default. Anything else requires ALLOW_NON_LOOPBACK=true.
     bind_host: str = "127.0.0.1"
     allow_non_loopback: bool = False
+    # Comma-separated browser-extension origins allowed to write (e.g. chrome-extension://<id>).
+    extension_origins: str = ""
     # Shared secret for POST /api/integrations/*. Generated on first run if unset.
     integration_token: str | None = None
 

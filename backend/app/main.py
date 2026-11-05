@@ -79,6 +79,7 @@ _origins = [
     f"http://localhost:{_port}",
     f"http://127.0.0.1:{_port}",
 ]
+_extension_origins = [o.strip() for o in app_settings.extension_origins.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_origins,
@@ -86,7 +87,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["Content-Type", "Authorization"],
 )
-app.add_middleware(LocalOnlyMiddleware, allowed_origins=_origins)
+app.add_middleware(LocalOnlyMiddleware, allowed_origins=_origins + _extension_origins)
 
 for r in (applications, dashboard, reviews, mail, settings, io, integrations, backup, updates):
     app.include_router(r.router)

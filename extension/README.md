@@ -5,7 +5,7 @@ A small Chrome/Edge (Manifest V3) extension that captures the job listing on the
 ## How it works
 
 1. On any job listing page, click the extension icon.
-2. Click **Capture this page**. The extension grabs the page text (or your current selection) and sends it to your local backend's `/api/parse` endpoint, which uses your active AI provider to extract the company, title, location, salary, etc.
+2. Click **Capture this page**. The extension reads only the page title and URL (page text never leaves the browser) and pre-fills the role and company for you to correct.
 3. Review the parsed fields and click **Save to Tracker**. It's created via `/api/applications`.
 
 ## Install (load unpacked)
@@ -28,6 +28,7 @@ Set a URL in Settings only if your backend runs outside that range or on another
 
 ## Notes
 
-- Requires an active AI provider configured in the tracker (Settings -> AI Providers), since capture uses the same parsing endpoint as paste-to-add.
+- Saving runs the tracker's duplicate preflight first (BLOCK / WARN / ALLOW) and stores the listing as **Tracked**, not as applied.
+- The backend only accepts writes from origins it knows. Add your extension's origin to `backend/.env`, e.g. `EXTENSION_ORIGINS=chrome-extension://<extension id>` (shown on chrome://extensions), and restart.
 - The extension only talks to your local AppTracker backend. `host_permissions` covers `localhost` and `127.0.0.1` on any port so that detection works. It sends page text there for parsing and nothing else.
 - Firefox support: the manifest is standard MV3; minor tweaks may be needed for `about:debugging` loading.

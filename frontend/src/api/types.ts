@@ -1,241 +1,322 @@
-export type ApplicationStatus =
-  | "saved"
-  | "applied"
-  | "online_assessment"
-  | "phone_screen"
-  | "interview"
-  | "offer"
-  | "rejected"
-  | "ghosted"
-  | "accepted";
+export type Stage =
+  | "tracked" | "ready" | "submitted" | "acknowledged" | "assessment_invited" | "assessment_completed"
+  | "screening" | "interviewing" | "offer" | "accepted" | "rejected" | "withdrawn" | "closed";
+
+export type Urgency =
+  | "overdue" | "within_3h" | "within_24h" | "within_72h" | "later" | "no_reliable_deadline"
+  | "completed" | "cancelled" | "expired";
+
+export type Decision = "BLOCK" | "WARN" | "ALLOW";
+
+export interface ActionItem {
+  id: string;
+  application_id: string;
+  assessment_id: string | null;
+  interview_id: string | null;
+  kind: string;
+  title: string;
+  instruction: string | null;
+  state: string;
+  due_at: string | null;
+  due_date: string | null;
+  due_timezone: string | null;
+  due_precision: "instant" | "day" | "relative" | "unknown";
+  due_expression_raw: string | null;
+  due_anchor: string | null;
+  deadline_assumption: string | null;
+  deadline_confidence: number | null;
+  evidence_quote: string | null;
+  completed_at: string | null;
+  created_at: string;
+  urgency: Urgency | null;
+  company: string | null;
+  role_title: string | null;
+  source_email_subject?: string | null;
+  source_email_link?: string | null;
+}
 
 export interface Application {
-  id: number;
+  id: string;
+  company_id: string;
   company: string;
-  title: string;
+  role_title: string;
+  external_job_id: string | null;
+  posting_url: string | null;
+  ats_platform: string | null;
+  recruiting_cycle: string | null;
+  category: string | null;
   location: string | null;
-  url: string | null;
-  source: string | null;
-  salary: string | null;
-  status: ApplicationStatus;
-  description: string | null;
-  skills: string | null;
+  application_channel: string | null;
+  resume_version_id: string | null;
+  resume_label: string | null;
+  stage: Stage;
+  stage_updated_at: string;
+  submitted_at: string | null;
+  acknowledged_at: string | null;
+  submission_evidence_type: string | null;
+  verified: boolean;
+  manual_stage_lock: boolean;
   notes: string | null;
-  contact_email: string | null;
-  job_id: string | null;
-  date_applied: string | null;
+  source_reference: string | null;
   created_at: string;
   updated_at: string;
+  next_action: ActionItem | null;
+  pending_reviews: number;
+  source: string | null;
 }
 
-export interface DuplicateGroup {
-  company: string;
-  reason: string;
-  applications: Application[];
+export interface AppEvent {
+  id: string;
+  application_id: string | null;
+  email_message_id: string | null;
+  event_type: string;
+  source: string;
+  event_at: string;
+  recorded_at: string;
+  from_stage: string | null;
+  to_stage: string | null;
+  description: string;
+  confidence: number | null;
+  evidence_quote: string | null;
+  evidence_locator: Record<string, unknown> | null;
+  actor: string;
+  supersedes_event_id: string | null;
 }
 
-export interface DismissedDuplicate {
-  low_id: number;
-  high_id: number;
-  created_at: string;
-  applications: Application[];
-}
-
-export interface StatusEvent {
-  id: number;
-  from_status: ApplicationStatus | null;
-  to_status: ApplicationStatus | null;
-  note: string | null;
-  source: "manual" | "email" | "system";
-  created_at: string;
-}
-
-export interface EmailActivity {
-  id: number;
-  kind: "suggestion" | "processed_email" | string;
+export interface Evidence {
+  email_message_id: string;
   subject: string | null;
   sender: string | null;
-  snippet: string | null;
-  summary: string | null;
-  suggestion_status: SuggestionStatusType | null;
-  is_job_related: boolean | null;
-  created_at: string;
+  received_at: string | null;
+  excerpt: string | null;
+  web_link: string | null;
 }
 
 export interface ApplicationDetail extends Application {
-  events: StatusEvent[];
-  related_emails: EmailActivity[];
+  events: AppEvent[];
+  assessments: { id: string; provider: string | null; assessment_type: string; assessment_url: string | null; invited_at: string; completed_at: string | null; state: string }[];
+  interviews: { id: string; round_label: string | null; starts_at: string | null; original_timezone: string | null; location_or_video_url: string | null; state: string }[];
+  action_items: ActionItem[];
+  evidence: Evidence[];
+  proposals: { id: string; state: string; proposal_type: string; reason: string; created_at: string }[];
 }
 
-export interface ParsedJob {
-  company: string | null;
-  title: string | null;
-  location: string | null;
-  url: string | null;
-  salary: string | null;
-  source: string | null;
-  description: string | null;
-  skills: string[];
-}
-
-export interface LLMProvider {
-  id: number;
-  name: string;
-  provider: string;
-  model: string;
-  api_base: string | null;
-  is_active: boolean;
-  has_api_key: boolean;
-  created_at: string;
-}
-
-export interface EmailAccount {
-  id: number;
-  name: string;
-  imap_host: string;
-  imap_port: number;
-  username: string;
-  use_ssl: boolean;
-  folder: string;
-  active: boolean;
-  last_synced_at: string | null;
-  created_at: string;
-}
-
-export type SuggestionKind = "status_change" | "new_application" | "note";
-export type SuggestionStatusType = "pending" | "approved" | "rejected";
-
-export interface Suggestion {
-  id: number;
-  application_id: number | null;
-  kind: SuggestionKind;
-  status: SuggestionStatusType;
-  suggested_status: ApplicationStatus | null;
-  summary: string | null;
-  confidence: number | null;
-  company: string | null;
-  title: string | null;
-  email_subject: string | null;
-  email_sender: string | null;
-  email_snippet: string | null;
-  email_date: string | null;
-  created_at: string;
-}
-
-export interface SuggestionApprovePayload {
-  company?: string | null;
-  title?: string | null;
-  suggested_status?: ApplicationStatus | null;
-}
-
-export interface AppSettings {
-  email_poll_interval_seconds: number;
-  auto_apply_suggestions: boolean;
-  min_suggestion_confidence: number;
-  follow_up_days: number;
-  hidden_board_statuses: ApplicationStatus[];
-}
-
-export interface SyncProgress {
-  running: boolean;
-  account_id: number | null;
-  account_name: string | null;
-  phase: string;
-  current: number;
-  total: number;
-  message: string;
-  stalled: boolean;
-  idle_seconds: number;
-}
-
-export interface UpdateStatus {
-  current_version: string;
-  latest_version: string | null;
-  update_available: boolean;
-  release_url: string;
-  notes: string;
-  published_at: string | null;
-  supported: boolean;
-  reason: string | null;
-  staged_version: string | null;
-  phase: "idle" | "checking" | "downloading" | "verifying" | "ready" | "error";
-  message: string;
-  percent: number;
-  busy: boolean;
-  error: string | null;
-}
-
-export interface HealthStatus {
-  status: string;
-  version?: string;
-  llm: {
-    configured: boolean;
-    name: string | null;
-    provider: string | null;
-    model: string | null;
-  };
-  email: {
-    accounts: number;
-    active: number;
-    last_synced_at: string | null;
-  };
-  sync: SyncProgress;
-}
-
-export interface AnalyticsFunnelStep {
+export interface DuplicateMatch {
+  application_id: string;
+  role_title: string;
+  external_job_id: string | null;
+  posting_url: string | null;
+  recruiting_cycle: string | null;
   stage: string;
+  submitted_at: string | null;
+  match_kind: string;
+  level: Decision;
+}
+
+export interface DuplicateCheck {
+  decision: Decision;
+  reasons: string[];
+  matches: DuplicateMatch[];
+  company_id: string | null;
+}
+
+export interface DeadlineInfo {
+  raw: string | null;
+  due_at: string | null;
+  due_date: string | null;
+  due_timezone: string | null;
+  precision: string;
+  anchor: string | null;
+  assumptions: string[];
+  needs_review: boolean;
+  confidence: number;
+  kind: string;
+}
+
+export interface PlanEvent {
+  index: number;
+  type: string;
   label: string;
-  count: number;
-  rate: number;
-  conversion: number | null;
+  event_at: string;
+  implied_stage: string | null;
+  action_required: string | null;
+  assessment_type: string | null;
+  assessment_provider: string | null;
+  evidence_quote: string | null;
+  evidence_quotes: string[];
+  confidence: number;
+  deadline: DeadlineInfo | null;
+  interview_time: DeadlineInfo | null;
 }
 
-export interface AnalyticsStageCount {
-  stage: ApplicationStatus;
-  count: number;
+export interface Candidate {
+  application_id: string;
+  company: string | null;
+  role_title: string;
+  external_job_id: string | null;
+  stage: string;
+  score: number;
+  reasons: string[];
+  disqualified: boolean;
 }
 
-export interface AnalyticsGroupRow {
-  submitted: number;
-  response_rate: number;
-  oa_rate: number;
-  interview_rate: number;
-  offer_rate: number;
-  assessments: number;
+export interface Review {
+  id: string;
+  proposal_type: string;
+  state: string;
+  reason: string;
+  confidence: number;
+  created_at: string;
+  reviewed_at: string | null;
+  review_notes: string | null;
+  proposed_changes: {
+    company: { name: string | null; resolved_name: string | null; resolution: string; ambiguous: boolean; confidence: number };
+    role: { title: string | null; requisition_id: string | null; job_url: string | null; confidence: number };
+    match: { decision: string; application_id: string | null; score: number; reason: string };
+    create_application: boolean;
+    events: PlanEvent[];
+    conflicts: { action_item_id: string; existing: { due_at: string | null; due_date: string | null; raw: string | null; evidence: string | null }; new: DeadlineInfo & { evidence: string | null } }[];
+    flags: string[];
+    overall_confidence: number;
+  };
+  alternatives: Candidate[];
+  target: { id: string; company: string; role_title: string; stage: string; external_job_id: string | null } | null;
+  email: { id: string; subject: string | null; sender_name: string | null; sender_address: string | null; received_at: string | null; excerpt: string | null; web_link: string | null } | null;
+  parser: { model: string; prompt_version: string; schema_version: string; notes: string[] | null } | null;
+}
+
+export interface SyncHealth {
+  accounts: number;
+  enabled_accounts: number;
+  auto_sync_enabled: boolean;
+  last_successful_sync_at: string | null;
+  last_run: { status: string; started_at: string; finished_at: string | null; summary: string | null } | null;
+  pending_messages: number;
+  warnings: string[];
+}
+
+export interface Summary {
+  active_applications: number;
+  tracked_not_submitted: number;
+  submitted_or_acknowledged: number;
+  verified_submissions: number;
+  unverified_records: number;
+  pending_oa: number;
+  deadlines_within_72h: number;
+  overdue: number;
+  no_reliable_deadline: number;
   interviews: number;
   offers: number;
+  rejected: number;
+  review_needed: number;
+  sync: SyncHealth;
 }
 
-export interface AnalyticsSourceRow extends AnalyticsGroupRow {
+export interface PendingDeadline extends DeadlineInfo {
+  proposal_id: string;
+  company: string | null;
+  role_title: string | null;
+  event_type: string;
+}
+
+export interface Deadlines {
+  buckets: Record<string, ActionItem[]>;
+  pending_review: PendingDeadline[];
+  now: string;
+}
+
+export interface ChangeEvent {
+  id: string;
+  event_type: string;
+  description: string;
+  recorded_at: string;
+  event_at: string;
+  to_stage: string | null;
+  actor: string;
   source: string;
+  application_id: string | null;
+  company: string | null;
+  role_title: string | null;
 }
 
-export interface AnalyticsCompanyRow extends AnalyticsGroupRow {
-  company: string;
+export interface Account {
+  id: string;
+  provider: "gmail" | "outlook" | "imap" | "fake";
+  address: string;
+  display_name: string | null;
+  auth_method: string;
+  enabled: boolean;
+  sync_scope: Record<string, unknown>;
+  connected: boolean;
+  last_successful_sync_at: string | null;
+  last_attempt_at: string | null;
+  last_error_code: string | null;
 }
 
-export interface Analytics {
-  total: number;
-  submitted: number;
-  active: number;
-  status_counts: Record<ApplicationStatus, number>;
-  response_count: number;
-  oa_count: number;
-  interview_count: number;
-  offer_count: number;
-  ghost_count: number;
-  response_rate: number;
-  oa_rate: number;
-  interview_rate: number;
-  offer_rate: number;
-  ghost_rate: number;
-  avg_days_to_response: number | null;
-  avg_days_to_oa: number | null;
-  avg_days_to_interview: number | null;
-  avg_days_to_offer: number | null;
-  funnel: AnalyticsFunnelStep[];
-  rejection_by_stage: AnalyticsStageCount[];
-  by_source: AnalyticsSourceRow[];
-  by_company: AnalyticsCompanyRow[];
-  over_time: { week: string; count: number }[];
+export interface Settings {
+  auto_apply_policy: "review_first" | "auto_harmless";
+  auto_apply_min_confidence: number;
+  poll_interval_seconds: number;
+  auto_sync_enabled: boolean;
+  initial_lookback_days: number;
+  display_timezone: string;
+  desktop_notifications: boolean;
+  ollama_model: string;
+  ollama_base_url: string;
+  missed_sync_warning_minutes: number;
+  oauth: { gmail_configured: boolean; outlook_configured: boolean; gmail_redirect_uri: string; outlook_redirect_uri: string };
+}
+
+export interface NotificationRule {
+  id: string;
+  kind: string;
+  lead_time_minutes: number;
+  enabled: boolean;
+  channel: "dashboard" | "desktop";
+}
+
+export interface Resume {
+  id: string;
+  label: string;
+  filename: string | null;
+  sha256: string | null;
+  local_path: string | null;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface LlmHealth {
+  ok: boolean;
+  reachable?: boolean;
+  version?: string;
+  model?: string;
+  model_installed?: boolean;
+  installed_qwen3_models?: string[];
+  error?: string;
+  hint?: string | null;
+}
+
+export interface ImportRow {
+  row: number;
+  company: string | null;
+  role_title: string | null;
+  action: string;
+  error?: string;
+  duplicate_check?: DuplicateCheck;
+  application_id?: string;
+}
+
+export interface SyncRun {
+  id: string;
+  email_account_id: string;
+  started_at: string;
+  finished_at: string | null;
+  status: string;
+  messages_seen: number;
+  messages_new: number;
+  messages_parsed: number;
+  proposals_created: number;
+  events_applied: number;
+  error_count: number;
+  safe_error_summary: string | null;
 }
