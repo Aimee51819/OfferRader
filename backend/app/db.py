@@ -33,6 +33,32 @@ def _set_sqlite_pragma(dbapi_connection, _connection_record) -> None:
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
+# Sync/processing sessions read, wait on the local model for seconds, then write. With
+# deferred transactions another connection's commit (e.g. the scheduler heartbeat) in
+# that gap makes the later write fail immediately with "database is locked" (stale WAL
+# snapshot; busy_timeout does not apply). Taking the write lock up front with
+# BEGIN IMMEDIATE makes such writers queue instead. Only the sync pipeline uses this
+# engine, so UI requests keep ordinary (non-blocking) read transactions.
+sync_engine = create_engine(
+    settings.db_url,
+    connect_args={"check_same_thread": False, "timeout": 30},
+    future=True,
+)
+event.listen(sync_engine, "connect", _set_sqlite_pragma)
+
+
+@event.listens_for(sync_engine, "connect")
+def _manual_transactions(dbapi_connection, _connection_record) -> None:
+    dbapi_connection.isolation_level = None  # we emit BEGIN ourselves
+
+
+@event.listens_for(sync_engine, "begin")
+def _begin_immediate(conn) -> None:
+    conn.exec_driver_sql("BEGIN IMMEDIATE")
+
+
+SyncSessionLocal = sessionmaker(bind=sync_engine, autoflush=False, autocommit=False, future=True)
+
 
 class Base(DeclarativeBase):
     pass

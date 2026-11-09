@@ -118,7 +118,44 @@ def deadlines(db: Session = Depends(get_db)) -> dict:
                 **d,
             })
     pending.sort(key=lambda r: r.get("due_at") or r.get("due_date") or "9999")
-    return {"buckets": buckets, "pending_review": pending, "now": now}
+    # Flat list, one row per deadline, nearest first. Each row says what kind of
+    # deadline it is: an assessment to complete, an interview, or the employer's reply.
+    flat, seen = [], set()
+    for rows in buckets.values():
+        for r in rows:
+            key = (r["application_id"], r["kind"], r["title"], str(r["due_at"]), r["due_date"])
+            if key not in seen:  # one email can list the same step twice
+                seen.add(key)
+                flat.append(r)
+    for r in flat:
+        r["deadline_type"] = DEADLINE_TYPES.get(r["kind"], "Other")
+    flat.sort(key=_due_sort_key)
+    # Done: deadlines you marked completed, most recent first.
+    done_rows = db.execute(select(ActionItem).where(ActionItem.state == "completed")).scalars().all()
+    done = []
+    for i in done_rows:
+        row = action_out(i, now, db)
+        row["deadline_type"] = DEADLINE_TYPES.get(row["kind"], "Other")
+        done.append(row)
+    done.sort(key=lambda r: r["completed_at"].isoformat() if r.get("completed_at") else "", reverse=True)
+    return {"items": flat, "done": done, "buckets": buckets, "pending_review": pending, "now": now}
+
+
+DEADLINE_TYPES = {
+    "oa_deadline": "OA",
+    "interview": "Interview",
+    "schedule_interview": "Interview",
+    "feedback": "Feedback",
+    "todo": "To do",
+}
+
+
+def _due_sort_key(r: dict) -> tuple:
+    if r.get("due_at"):
+        return (0, r["due_at"].isoformat() if hasattr(r["due_at"], "isoformat") else str(r["due_at"]))
+    if r.get("due_date"):
+        return (0, f"{r['due_date']}T23:59:59")
+    return (1, "")
 
 
 @router.get("/changes")

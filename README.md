@@ -1,95 +1,188 @@
-<p align="center">
-  <img src="docs/banner.png" alt="Job Application Tracker" width="100%" />
-</p>
-
-<h1 align="center">Job Application Feedback Agent</h1>
+<h1 align="center">OfferRadar</h1>
 
 <p align="center">
-  <strong>A local-first tracker that reads recruiting email read-only, extracts OA deadlines with a local Qwen model, and stops you from applying to the same opening twice.</strong>
+  <strong>Your inbox, turned into a private job-hunt dashboard.</strong><br/>
+  Every application, online assessment, interview and rejection, found for you by a local AI.<br/>
+  No spreadsheets. No cloud. No email ever leaves your laptop.
 </p>
 
-Built on [liamgelfand/application-tracker](https://github.com/liamgelfand/application-tracker) (MIT). Everything runs on your Mac: FastAPI + SQLite backend, React dashboard, Ollama for the model. Nothing is sent to a cloud AI service, and no email is ever sent, moved, deleted or marked read.
+<p align="center">
+  <img alt="Local LLM" src="https://img.shields.io/badge/AI-100%25%20local%20(Ollama)-7d8f7b">
+  <img alt="Read-only mail" src="https://img.shields.io/badge/mail-read--only-8a9fb4">
+  <img alt="Gmail and Outlook" src="https://img.shields.io/badge/works%20with-Gmail%20%7C%20Outlook-c19a93">
+  <img alt="License MIT" src="https://img.shields.io/badge/license-MIT-c9b07a">
+</p>
 
-## What it answers
+<p align="center">
+  <img src="docs/screenshots/dashboard.jpg" alt="OfferRadar dashboard" width="100%" />
+</p>
 
-| Question | Where |
+---
+
+## Why OfferRadar?
+
+Applying to 50+ internships or jobs means 50+ confirmation emails, a dozen OA links with
+"complete within 72 hours", and rejections buried in Promotions. Keeping a spreadsheet in sync
+by hand is a second job.
+
+OfferRadar connects to your mailbox **read-only**, picks out the emails that are actually about
+your applications, and keeps a dashboard up to date for you:
+
+- **Applied?** Every confirmation ("Thanks for applying…") becomes a row: company, exact role, req ID, date.
+- **What's due?** OA and interview deadlines are pulled out of the email, in the email's own words, sorted nearest first.
+- **Where do I stand?** Statuses move forward on their own: Applied → OA invited → Interview → Offer / Rejected.
+- **Private by design.** A small model (Qwen3-4B) runs on your machine through [Ollama](https://ollama.com). Nothing is sent to OpenAI, Anthropic or anyone else.
+
+## Features
+
+| | |
 | --- | --- |
-| Where have I *actually* applied (company, exact role, req id / URL, date, channel, resume)? | Dashboard table → **Evidence** column (✓ Verified vs Unverified) |
-| What is each application's latest verified status? | Stage badge + per-application timeline (append-only event history) |
-| What do I need to do now, and by when (Eastern Time), in the email's own words? | **Deadlines** page, application detail |
-| Which OAs are due in 72 h / 24 h / 3 h, overdue, or have no reliable deadline? | **Deadlines** page buckets, dashboard cards, reminders |
-| Am I about to apply to the same opening again? | **Add application** live preflight: BLOCK / WARN / ALLOW with reasons |
-| What changed since the last sync, and what needs my review? | Dashboard "Since last sync", **Review queue** |
+| 📬 **Gmail + Outlook** | OAuth with read-only scopes (`gmail.readonly`, `Mail.Read`). The app can't send, delete, move or mark mail. |
+| 🧠 **Local AI extraction** | Company, role, req ID, event type and deadline, extracted as strict JSON and checked against verbatim quotes from the email. |
+| 🚦 **Smart filter** | Only mail from applicant-tracking systems (Workday, Greenhouse, Lever, Ashby…) or with real application wording reaches the model. Newsletters and job alerts are skipped. In one real mailbox, 344 emails came down to 77 model calls. |
+| 🗂 **Grouped dashboard** | Roles grouped by company, filter by category (PM / SE / SDE-SWE / Data) and status, sort by company or by date. |
+| ⏰ **Deadlines page** | OA, interview, to-do and "we'll get back to you by…" dates, one row each, nearest first, with a Done list. |
+| 🧭 **Board view** | Kanban by stage; columns scroll on their own, so 40 "Submitted" cards never bury the page. |
+| ✉️ **One click to the source** | Every row links to the email it came from. |
+| ↶ **Recover** | Removed something by mistake? Undo it. |
+| 🔁 **Duplicate guard** | Warns before you apply to the same opening twice. |
 
-## Safety properties
+<p align="center">
+  <img src="docs/screenshots/applications.jpg" alt="Applications table with filters" width="49%" />
+  <img src="docs/screenshots/deadlines.jpg" alt="Deadlines page" width="49%" />
+</p>
 
-- **Read-only mail.** Gmail uses `gmail.readonly`, Microsoft Graph uses delegated `Mail.Read`, both via OAuth 2.0 + PKCE. The HTTP client used by both adapters can only issue `GET` requests to the provider's API host. Optional IMAP uses `EXAMINE` + `BODY.PEEK[]`.
-- **Local model only.** Qwen3-4B-Instruct through Ollama on loopback. The Ollama URL must resolve to a loopback address; there is no OpenAI/Anthropic/Gemini fallback. If Ollama is down, mail waits in the local store and is parsed later.
-- **Never invents facts.** The model only quotes. A deterministic normalizer computes deadlines; date-only deadlines stay date-only; a time without a timezone never becomes a UTC instant; DST gaps/overlaps and business-day counts go to review.
-- **One event → one application.** Company-only evidence never auto-attaches; a rejection for one requisition can't touch another.
-- **Review-first.** Terminal decisions (rejection, offer, withdrawal), ambiguous matches/deadlines, conflicting reminders, unknown applications and pinned stages always wait for you. Every approve / edit / reassign / reject / undo is audited.
-- **No auto-applying.** This tool never submits applications. A separate, human-approved tool may report a *confirmed* receipt to `POST /api/integrations/submissions`.
+<sub>Screenshots use the built-in synthetic demo data.</sub>
 
-## Quick start (Apple Silicon Mac)
+---
 
-Full walkthrough including OAuth app registration: **[docs/SETUP_MACOS.md](docs/SETUP_MACOS.md)**.
+## Quick start (macOS, about 10 minutes)
+
+You need Homebrew. Everything else is installed below.
+
+**1. Install the tools**
 
 ```bash
 brew install python@3.12 node ollama
 ```
 
-```bash
-git clone <your fork> application-tracker && cd application-tracker
-make setup
-```
+**2. Get the code and install dependencies**
 
 ```bash
-ollama serve   # or open the Ollama app
+git clone https://github.com/Aimee51819/offerradar.git
+cd offerradar
+make setup PYTHON=python3.12
 ```
+
+**3. Start the local model** (keep this terminal open)
+
+```bash
+ollama serve
+```
+
+In a new terminal, download the model (about 2.5 GB, one time):
 
 ```bash
 ollama pull qwen3:4b-instruct-2507-q4_K_M
 ```
 
+**4. Configure and check**
+
 ```bash
-cp backend/.env.example backend/.env   # then add OAuth client IDs
+cp backend/.env.example backend/.env
 make migrate
 make check-ollama
-make dev       # backend http://127.0.0.1:8000, UI http://localhost:5173
 ```
 
-Try it with synthetic mail first (separate data directory, no network):
+**5. Try it with fake emails first** (no mailbox needed)
 
 ```bash
 cd backend && DATA_DIR=./demo-data .venv/bin/python -m app.cli demo --reset
-DATA_DIR=./demo-data .venv/bin/uvicorn app.main:app --port 8000
+DATA_DIR=./demo-data .venv/bin/python -m app.cli apply-pending
+cd ../frontend && npm run build && cd ../backend
+DATA_DIR=./demo-data .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-## Tests and evaluation
+Open **http://localhost:8000**. You should see the dashboard above.
+
+**6. Connect your real inbox**
+
+1. Register a free OAuth app with Google or Microsoft. It takes about 5 minutes; the step-by-step checklist is in **[docs/SETUP_MACOS.md, section 4](docs/SETUP_MACOS.md#4-oauth-app-registration--consent-checklist-you)**.
+2. Put the client ID in `backend/.env` (`GOOGLE_CLIENT_ID=…` or `MICROSOFT_CLIENT_ID=…`).
+3. Start the app without `DATA_DIR`, so your real data is kept apart from the demo:
+
+   ```bash
+   cd backend && .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+   ```
+
+4. Open http://localhost:8000 → **Settings** → **Connect Gmail** / **Connect Outlook**, approve the read-only access, then press **Sync now** on the dashboard.
+
+The first sync reads the last 60 days of mail. With the smart filter on, a few hundred emails take a few minutes on an M-series Mac.
+
+> **Tip:** if your personal Outlook account can't open the Microsoft Entra portal, sign in at
+> [portal.azure.com](https://portal.azure.com) first and search for **App registrations** there.
+> Choose "Accounts in any organizational directory and personal Microsoft accounts".
+
+---
+
+## How it works
+
+```
+Mailbox (read-only OAuth)
+   │  fetch last N days
+   ▼
+Local store (SQLite, encrypted tokens)
+   │  smart filter: ATS sender or real application wording?   ── no ──► ignored, no model call
+   ▼ yes
+Qwen3-4B on Ollama (localhost) ──► strict JSON: company, role, req ID, events, deadline quote
+   │  validate: every fact must be quoted from the email; rule backstop for missed
+   │  "thanks for applying" / rejection wording
+   ▼
+Match to an existing application (req ID, thread, company + role) or create one
+   ▼
+Dashboard · Deadlines · Board
+```
+
+- Deadlines are computed by deterministic code from the quoted text ("within 72 hours of receiving this email"), never guessed by the model.
+- Each email is matched to at most one application; an OA for one role never moves another role at the same company.
+- Everything runs on `127.0.0.1`. The server refuses non-local clients.
+
+More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Accuracy
+
+`make eval` scores your installed model on a synthetic corpus of 29 recruiting emails
+(confirmations, OAs with tricky time zones, rejections, prompt injection, hackathon sign-ups,
+job-board spam):
+
+| Metric | Qwen3-4B-Instruct (q4_K_M) |
+| --- | --- |
+| Is this a job email? | 1.00 |
+| Event precision / recall | 0.92 / 0.85 |
+| Company + role | 0.96 |
+| Deadline | 1.00 (0 invented times) |
+
+## Development
 
 ```bash
-make test                      # 104 backend tests + 12 frontend tests
-make eval                      # score your installed Qwen on the synthetic corpus (needs Ollama)
-cd backend && .venv/bin/python -m app.cli eval --backend rules   # regex baseline, for comparison
-cd backend && .venv/bin/python -m app.cli reparse-fixtures --backend ollama 03_ibm_pm_oa  # re-parse fixtures in a sandbox
+make test        # backend (pytest) + frontend (vitest)
+make eval        # model accuracy on the synthetic corpus (needs Ollama)
+make dev         # API on 127.0.0.1:8000, hot-reload UI on http://localhost:5173
 ```
 
-## Documentation
+Interactive API docs: http://127.0.0.1:8000/docs
 
-- [docs/SETUP_MACOS.md](docs/SETUP_MACOS.md) — install, Ollama model, OAuth consent checklist (Gmail + Microsoft), first sync, Docker option.
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — ER diagram, pipeline, extraction JSON contract, matching / transition / duplicate policies, REST endpoints, known limitations.
-- Interactive API docs: http://127.0.0.1:8000/docs
+## Privacy and security
 
-## Security notes
+- Mail access is read-only. Tokens are encrypted at rest and never logged.
+- Email text only goes to the model on your own machine. There is no cloud fallback and no telemetry.
+- The server binds to `127.0.0.1` only. Don't expose it to the internet.
+- Keep `backend/.env` and your data folder (`~/Library/Application Support/AppTracker`) out of git and cloud sync.
 
-- Single-user and **local only**: the server binds `127.0.0.1`, rejects non-loopback clients and unexpected `Host` headers (DNS rebinding), and blocks cross-origin writes. Startup refuses a non-loopback `BIND_HOST` unless `ALLOW_NON_LOOPBACK=true`.
-- **Do not expose this to the internet.** A remote deployment needs authentication, TLS and a security review first; none of that is provided here. Never port-forward 8000, 5173, or Ollama's 11434.
-- OAuth tokens and IMAP passwords are encrypted at rest (Fernet) in SQLite, keyed by `DATA_DIR/secret.key` (mode 0600) or, with `USE_KEYCHAIN=true`, the macOS Keychain. Tokens are never logged or returned by the API. **Disconnect** deletes the token (and revokes it at Google).
-- Email bodies are converted to plain text, capped in size, wrapped as untrusted data in the prompt and never rendered as HTML. Attachments are skipped. Bodies are cached encrypted only until parsed; a short plain-text evidence excerpt is kept for review.
-- The integration endpoint needs `Authorization: Bearer <token>` (`python -m app.cli integration-token`).
-- No telemetry or third-party analytics. The only outbound calls are to Google/Microsoft APIs (when you connect a mailbox) and the optional, user-triggered update check inherited from upstream (Windows builds only).
-- Keep `backend/.env`, `DATA_DIR` and backups out of git and cloud-sync folders.
+## Credits
+
+OfferRadar is built on [liamgelfand/application-tracker](https://github.com/liamgelfand/application-tracker) (MIT).
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

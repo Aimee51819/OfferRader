@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { SyncButton } from "./Dashboard";
 import { api } from "../api/client";
 import type { Account, Settings as SettingsT } from "../api/types";
 import { ErrorBox, Loading } from "../components/States";
@@ -108,46 +109,29 @@ function Accounts({ s }: { s: SettingsT }) {
 }
 
 function SyncPanel({ s, save }: { s: SettingsT; save: (p: Partial<SettingsT>) => void }) {
-  const qc = useQueryClient();
   const { data: runs = [] } = useQuery({ queryKey: ["runs"], queryFn: api.syncRuns, refetchInterval: 15000 });
-  const [dry, setDry] = useState<Awaited<ReturnType<typeof api.dryRun>> | null>(null);
-  const syncNow = useMutation({ mutationFn: api.syncNow, onSuccess: () => setTimeout(() => qc.invalidateQueries(), 1500) });
-  const dryRun = useMutation({ mutationFn: api.dryRun, onSuccess: setDry });
   return (
     <div className="card stack">
-      <h3 className="card-title">Sync</h3>
-      <ol className="muted">
-        <li>Connect a mailbox, then <em>Fetch only</em> to read recent mail into the local store.</li>
-        <li>Run a <em>dry run</em> to see what the agent would do (nothing is saved).</li>
-        <li>Enable automatic sync.</li>
-      </ol>
-      <div className="row">
-        <button className="btn-secondary" onClick={() => dryRun.mutate()} disabled={dryRun.isPending}>Dry run on fetched mail</button>
-        <button className="btn-primary" onClick={() => syncNow.mutate()} disabled={syncNow.isPending}>Sync now</button>
+      <div className="card-head">
+        <h3 className="card-title">Sync</h3>
+        <SyncButton />
       </div>
-      {dry && (
-        <table className="analytics-table">
-          <thead><tr><th>Subject</th><th>Result</th><th>Events</th><th>Why</th></tr></thead>
-          <tbody>
-            {dry.messages.map((m, i) => (
-              <tr key={i}><td>{m.subject}</td><td>{m.state}{m.auto_apply ? " (auto)" : m.proposal_type ? ` → review (${m.proposal_type})` : ""}</td><td>{m.events?.join(", ")}</td><td>{m.reason ?? m.error}</td></tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+      <p className="muted">Recognised application emails go straight to the dashboard. Remove anything wrong from there.</p>
       <label className="switch-row"><input type="checkbox" checked={s.auto_sync_enabled} onChange={(e) => save({ auto_sync_enabled: e.target.checked })} /> Automatic background sync</label>
+      <div className="form-grid">
       <label className="field">Interval (minutes)
         <input type="number" min={5} max={1440} defaultValue={Math.round(s.poll_interval_seconds / 60)} onBlur={(e) => save({ poll_interval_seconds: Number(e.target.value) * 60 })} />
       </label>
       <label className="field">Initial look-back (days)
         <input type="number" min={1} max={365} defaultValue={s.initial_lookback_days} onBlur={(e) => save({ initial_lookback_days: Number(e.target.value) })} />
       </label>
+      </div>
       <h4>Recent runs</h4>
       <table className="analytics-table">
-        <thead><tr><th>Started</th><th>Status</th><th>New</th><th>Parsed</th><th>Reviews</th><th>Applied</th><th>Notes</th></tr></thead>
+        <thead><tr><th>Started</th><th>Status</th><th>New</th><th>Parsed</th><th>Applied</th><th>Notes</th></tr></thead>
         <tbody>
           {runs.slice(0, 8).map((r) => (
-            <tr key={r.id}><td>{formatInstant(r.started_at)}</td><td>{r.status}</td><td>{r.messages_new}</td><td>{r.messages_parsed}</td><td>{r.proposals_created}</td><td>{r.events_applied}</td><td>{r.safe_error_summary}</td></tr>
+            <tr key={r.id}><td>{formatInstant(r.started_at)}</td><td>{r.status}</td><td>{r.messages_new}</td><td>{r.messages_parsed}</td><td>{r.events_applied}</td><td>{r.safe_error_summary}</td></tr>
           ))}
         </tbody>
       </table>
@@ -182,17 +166,7 @@ function Notifications({ s, save }: { s: SettingsT; save: (p: Partial<SettingsT>
 function Policy({ s, save }: { s: SettingsT; save: (p: Partial<SettingsT>) => void }) {
   return (
     <div className="card stack">
-      <h3 className="card-title">Automation policy</h3>
-      <label className="field">When an email is understood confidently
-        <select value={s.auto_apply_policy} onChange={(e) => save({ auto_apply_policy: e.target.value as SettingsT["auto_apply_policy"] })}>
-          <option value="review_first">Always ask me first (default)</option>
-          <option value="auto_harmless">Apply routine updates automatically</option>
-        </select>
-      </label>
-      <p className="muted">Even with automatic updates: rejections, offers, withdrawals, ambiguous matches or deadlines, conflicts, unknown applications and pinned stages always go to review.</p>
-      <label className="field">Minimum confidence for automatic updates
-        <input type="number" step={0.05} min={0.5} max={1} defaultValue={s.auto_apply_min_confidence} onBlur={(e) => save({ auto_apply_min_confidence: Number(e.target.value) })} />
-      </label>
+      <h3 className="card-title">General</h3>
       <label className="field">Display timezone
         <input defaultValue={s.display_timezone} onBlur={(e) => save({ display_timezone: e.target.value })} />
       </label>

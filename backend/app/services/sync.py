@@ -16,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..core.secrets import load_json_secret, load_secret, store_secret
-from ..db import SessionLocal
+from ..db import SessionLocal, SyncSessionLocal
 from ..models import EmailAccount, SyncRun, utcnow
 from . import settings_service
 from .llm.ollama import LLMBackend, default_backend
@@ -191,7 +191,7 @@ def sync_all(*, backend: LLMBackend | None = None) -> list[str]:
     if not _LOCK.acquire(blocking=False):
         logger.info("Sync already running; skipping this tick.")
         return []
-    db = SessionLocal()
+    db = SyncSessionLocal()
     try:
         ids = []
         accounts = db.execute(select(EmailAccount).where(EmailAccount.enabled.is_(True))).scalars().all()

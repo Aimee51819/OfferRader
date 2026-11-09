@@ -233,7 +233,35 @@ def application_out(db: Session, app: Application, now: datetime | None = None) 
         "next_action": nxt,
         "pending_reviews": pending or 0,
         "source": _source_of(app),
+        "applied_at": app.submitted_at or _first_evidence_at(db, app) or app.created_at,
+        **_latest_email(db, app),
     }
+
+
+def _latest_email(db: Session, app: Application) -> dict:
+    """Link to the most recent email behind this application (opens in Outlook/Gmail)."""
+    from ..models import ApplicationEvent, EmailMessage
+
+    row = db.execute(
+        select(EmailMessage.web_link, EmailMessage.subject)
+        .join(ApplicationEvent, ApplicationEvent.email_message_id == EmailMessage.id)
+        .where(ApplicationEvent.application_id == app.id, EmailMessage.web_link.is_not(None))
+        .order_by(EmailMessage.received_at.desc())
+        .limit(1)
+    ).first()
+    return {"source_email_link": row[0] if row else None, "source_email_subject": row[1] if row else None}
+
+
+def _first_evidence_at(db: Session, app: Application) -> datetime | None:
+    """Earliest email-backed event: the best stand-in for 'applied on' when no
+    confirmation email exists (e.g. only an OA invitation arrived)."""
+    from ..models import ApplicationEvent
+
+    return db.scalar(
+        select(func.min(ApplicationEvent.event_at)).where(
+            ApplicationEvent.application_id == app.id, ApplicationEvent.email_message_id.is_not(None)
+        )
+    )
 
 
 def application_detail(db: Session, app: Application) -> dict:

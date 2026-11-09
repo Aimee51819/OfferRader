@@ -1,0 +1,39 @@
+{
+  "name": "25_hackathon_registration",
+  "account": "primary",
+  "provider_message_id": "m25",
+  "thread_id": "thr-m25",
+  "internet_message_id": "<m25@mail.example>",
+  "from_name": "Initrode Inc.",
+  "from_address": "calendar@events-mail.example",
+  "subject": "Initrode Hackathon: Build at the Frontier of AI \u7684\u62a5\u540d\u6b63\u5728\u7b49\u5f85\u5ba1\u6838",
+  "received_at": "2027-02-20T03:09:00Z",
+  "sent_at": "2027-02-20T03:09:00Z",
+  "body": "Initrode Inc.\n\u4f60\u7684\u62a5\u540d\u5f85\u5ba1\u6279\uff0c\u6d3b\u52a8\u4e3a\nInitrode Hackathon: Build at the Frontier of AI\n\n11\u670814\u65e5\u661f\u671f\u516d 9:00 - 17:00\n\u4e3b\u529e\u4eba\u9700\u8981\u6279\u51c6\u4f60\u7684\u6ce8\u518c\u540e\uff0c\u4f60\u624d\u80fd\u53c2\u52a0\u6d3b\u52a8\u3002\u6279\u51c6\u540e\u6211\u4eec\u4f1a\u53d1\u9001\u90ae\u4ef6\u901a\u77e5\u4f60\u3002",
+  "expected": {
+    "is_job_related": false,
+    "events": [],
+    "company": null,
+    "role": null
+  },
+  "model_output": {
+    "schema_version": "1.0",
+    "is_job_related": false,
+    "language": "en",
+    "company": {
+      "name": null,
+      "domain": null,
+      "confidence": 0.0
+    },
+    "role": {
+      "title": null,
+      "requisition_id": null,
+      "job_url": null,
+      "confidence": 0.0
+    },
+    "events": [],
+    "overall_confidence": 0.92,
+    "ambiguities": [],
+    "needs_review": false
+  }
+}

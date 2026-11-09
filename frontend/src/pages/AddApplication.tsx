@@ -96,7 +96,7 @@ export default function AddApplication() {
           <label className="field">Category
             <select value={form.category} onChange={set("category")}>
               <option value="">Infer from title</option>
-              {["PM", "TPM", "SE", "SA", "SWE", "Data", "Other"].map((c) => <option key={c}>{c}</option>)}
+              {["PM", "SE", "SDE/SWE", "Data", "Other"].map((c) => <option key={c}>{c}</option>)}
             </select>
           </label>
           <label className="field">Channel

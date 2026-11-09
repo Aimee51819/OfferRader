@@ -8,17 +8,16 @@ import ApplicationDetail from "./pages/ApplicationDetail";
 import Dashboard from "./pages/Dashboard";
 import Deadlines from "./pages/Deadlines";
 import ImportExport from "./pages/ImportExport";
-import ReviewQueue from "./pages/ReviewQueue";
 import Settings from "./pages/Settings";
 import { describeDue } from "./lib/format";
 
 function BrandMark() {
   return (
     <svg className="brand-icon" viewBox="0 0 64 64" aria-hidden="true">
-      <rect width="64" height="64" rx="14" fill="#1a1917" />
-      <rect x="14" y="37" width="8" height="13" rx="3" fill="#e9e5de" />
-      <rect x="29" y="26" width="8" height="24" rx="3" fill="#e9e5de" />
-      <rect x="44" y="14" width="8" height="36" rx="3" fill="#c8734a" />
+      <rect width="64" height="64" rx="14" fill="#7d8f7b" />
+      <rect x="14" y="37" width="8" height="13" rx="3" fill="#f4f1ec" />
+      <rect x="29" y="26" width="8" height="24" rx="3" fill="#f4f1ec" />
+      <rect x="44" y="14" width="8" height="36" rx="3" fill="#d8b4ac" />
     </svg>
   );
 }
@@ -40,7 +39,7 @@ function Reminders() {
   return (
     <div className="reminders" role="region" aria-label="Reminders">
       {data.slice(0, 3).map((n) => (
-        <div key={n.id} className="alert alert-warn flex-between">
+        <div key={n.id} className="alert alert-warn reminder">
           <span>
             ⏰ <strong>{n.action_item.title}</strong> — {n.action_item.company}: {n.action_item.role_title}. Due {describeDue(n.action_item)}
           </span>
@@ -53,21 +52,17 @@ function Reminders() {
 
 function Sidebar() {
   const { data: summary } = useQuery({ queryKey: ["summary"], queryFn: api.summary, refetchInterval: 60000 });
-  const reviewCount = summary?.review_needed ?? 0;
   const urgent = (summary?.overdue ?? 0) + (summary?.deadlines_within_72h ?? 0);
   return (
     <aside className="sidebar">
       <div className="brand">
         <BrandMark />
-        AppTracker
+        OfferRadar
       </div>
       <nav aria-label="Main">
         <NavLink to="/" end className="nav-link">Dashboard</NavLink>
         <NavLink to="/deadlines" className="nav-link">
           Deadlines {urgent > 0 && <span className="nav-badge">{urgent}</span>}
-        </NavLink>
-        <NavLink to="/review" className="nav-link">
-          Review queue {reviewCount > 0 && <span className="nav-badge">{reviewCount}</span>}
         </NavLink>
         <NavLink to="/add" className="nav-link">Add application</NavLink>
         <NavLink to="/analytics" className="nav-link">Funnel</NavLink>
@@ -78,7 +73,7 @@ function Sidebar() {
       {typeof Notification !== "undefined" && Notification.permission === "default" && (
         <button className="btn-ghost" onClick={() => Notification.requestPermission()}>Enable browser reminders</button>
       )}
-      <div className="muted small">Local only · read-only mail · no auto-apply</div>
+      <div className="muted small sidebar-foot">Local only · read-only mail</div>
     </aside>
   );
 }
@@ -92,7 +87,6 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/deadlines" element={<Deadlines />} />
-          <Route path="/review" element={<ReviewQueue />} />
           <Route path="/add" element={<AddApplication />} />
           <Route path="/analytics" element={<Analytics />} />
           <Route path="/import" element={<ImportExport />} />

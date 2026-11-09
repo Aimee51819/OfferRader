@@ -1,0 +1,56 @@
+{
+  "name": "29_zh_rejection",
+  "account": "primary",
+  "provider_message_id": "m29",
+  "thread_id": "thr-m29",
+  "internet_message_id": "<m29@mail.example>",
+  "from_name": "\u661f\u4e91\u6e38\u620f",
+  "from_address": "hr@service.nebula-games.example",
+  "subject": "\u611f\u8c22\u5e94\u8058\u661f\u4e91\u6e38\u620f",
+  "received_at": "2027-02-23T08:00:00Z",
+  "sent_at": "2027-02-23T08:00:00Z",
+  "body": "\u5b59\u540c\u5b66\uff0c\u60a8\u597d\uff01\n\n\u611f\u8c22\u60a8\u5e94\u8058\u6211\u4eec\u7684\u6e38\u620f\u8fd0\u8425\u5b9e\u4e60\u751f\u804c\u4f4d\u3002\u60a8\u7684\u5b66\u8bc6\u548c\u8d44\u5386\u7ed9\u6211\u4eec\u7559\u4e0b\u4e86\u826f\u597d\u7684\u5370\u8c61\u3002\u9057\u61be\u7684\u662f\uff0c\u60a8\u6240\u5e94\u8058\u804c\u4f4d\u7684\u8981\u6c42\u4e0e\u60a8\u7684\u5b9e\u9645\u60c5\u51b5\u4e0d\u592a\u7b26\u5408\uff0c\u56e0\u6b64\u6682\u65f6\u6ca1\u6709\u673a\u4f1a\u4e0e\u60a8\u5408\u4f5c\u3002\n\n\u6211\u4eec\u5df2\u7ecf\u5c06\u60a8\u7684\u7b80\u5386\u7eb3\u5165\u4eba\u624d\u5e93\u3002",
+  "expected": {
+    "is_job_related": true,
+    "events": [
+      "rejection"
+    ],
+    "company": "\u661f\u4e91\u6e38\u620f",
+    "role": "\u6e38\u620f\u8fd0\u8425\u5b9e\u4e60\u751f"
+  },
+  "model_output": {
+    "schema_version": "1.0",
+    "is_job_related": true,
+    "language": "en",
+    "company": {
+      "name": "\u661f\u4e91\u6e38\u620f",
+      "domain": null,
+      "confidence": 0.95
+    },
+    "role": {
+      "title": "\u6e38\u620f\u8fd0\u8425\u5b9e\u4e60\u751f",
+      "requisition_id": null,
+      "job_url": null,
+      "confidence": 0.9
+    },
+    "events": [
+      {
+        "type": "rejection",
+        "event_time": null,
+        "event_time_raw": null,
+        "action_required": null,
+        "assessment_type": null,
+        "assessment_provider": null,
+        "action_url": null,
+        "deadline": null,
+        "evidence_quotes": [
+          "\u6682\u65f6\u6ca1\u6709\u673a\u4f1a\u4e0e\u60a8\u5408\u4f5c"
+        ],
+        "confidence": 0.92
+      }
+    ],
+    "overall_confidence": 0.92,
+    "ambiguities": [],
+    "needs_review": false
+  }
+}

@@ -120,6 +120,70 @@ def cmd_token(_args) -> None:
         db.close()
 
 
+def cmd_apply_pending(_args) -> None:
+    """Move every pending review proposal onto the dashboard (auto_all policy).
+
+    Each proposal is re-matched against the applications that exist now, oldest email
+    first, so several emails about one application land on the same row.
+    """
+    from sqlalchemy import select
+
+    from .db import SyncSessionLocal, init_db
+    from .domain.extraction_schema import Extraction
+    from .models import Application, EmailMessage, ParsedMessage, ReviewProposal, utcnow
+    from .services import settings_service
+    from .services.pipeline.apply import apply_plan, build_plan
+    from .services.pipeline.process import _create_app
+
+    init_db()
+    db = SyncSessionLocal()
+    try:
+        settings_service.set_value(db, "auto_apply_policy", "auto_all")
+        db.commit()
+        rows = db.execute(
+            select(ReviewProposal, EmailMessage)
+            .join(EmailMessage, EmailMessage.id == ReviewProposal.email_message_id)
+            .where(ReviewProposal.state == "pending")
+            .order_by(EmailMessage.received_at.asc())
+        ).all()
+        applied = skipped = 0
+        for p, msg in rows:
+            parsed = db.get(ParsedMessage, p.parsed_message_id) if p.parsed_message_id else None
+            if parsed is None or not parsed.extracted_payload:
+                skipped += 1
+                continue
+            ext = Extraction.model_validate(parsed.extracted_payload)
+            if not ext.is_job_related:
+                p.state, p.review_notes = "rejected", "auto_all: model said not job related"
+                p.reviewed_at = utcnow()
+                db.commit()
+                skipped += 1
+                continue
+            plan = build_plan(db, msg, ext)
+            app = db.get(Application, plan["target_application_id"]) if plan["target_application_id"] else None
+            app = app or _create_app(db, plan, msg)
+            if app is None:
+                skipped += 1
+                continue
+            p.applied_event_ids = apply_plan(db, plan, app, actor="agent:auto_all", human_approved=True)
+            p.state, p.target_application_id, p.reviewed_at = "approved", app.id, utcnow()
+            p.review_notes = "auto_all"
+            db.commit()
+            applied += 1
+        from .domain.normalize import infer_category
+
+        recat = 0
+        for a in db.execute(select(Application)).scalars():
+            cat = infer_category(a.role_title)
+            if cat and cat != a.category:
+                a.category = cat
+                recat += 1
+        db.commit()
+        print(f"applied {applied}, skipped {skipped}, re-categorised {recat}")
+    finally:
+        db.close()
+
+
 def cmd_backup(_args) -> None:
     from .db import backup_database
 
@@ -145,6 +209,7 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("sync-once").set_defaults(fn=cmd_sync_once)
     sub.add_parser("integration-token").set_defaults(fn=cmd_token)
     sub.add_parser("backup").set_defaults(fn=cmd_backup)
+    sub.add_parser("apply-pending").set_defaults(fn=cmd_apply_pending)
     args = p.parse_args(argv)
     args.fn(args)
 

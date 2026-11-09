@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
@@ -157,6 +158,35 @@ def get_application(app_id: str, db: Session = Depends(get_db)) -> dict:
     if app is None:
         raise not_found("application not found")
     return application_detail(db, app)
+
+
+@router.delete("/applications/{app_id}")
+def delete_application(app_id: str, db: Session = Depends(get_db)) -> dict:
+    """Remove an application and everything attached to it (events, OAs, interviews,
+    deadlines cascade in SQLite). Source emails stay in the local store, marked parsed."""
+    app = db.get(Application, app_id)
+    if app is None:
+        raise not_found("application not found")
+    from ..services import trash
+
+    trash.snapshot_application(db, app_id, f"{app.company.canonical_name} · {app.role_title}")
+    db.expunge(app)
+    # Explicit child deletes (children first) so this works even on a connection where
+    # SQLite foreign-key cascades are off.
+    from ..models import ActionItem, ApplicationEvent, Assessment, Interview, ReviewProposal
+
+    db.execute(sa_delete(ActionItem).where(ActionItem.application_id == app_id))
+    db.execute(sa_delete(Interview).where(Interview.application_id == app_id))
+    db.execute(sa_delete(Assessment).where(Assessment.application_id == app_id))
+    db.execute(
+        ReviewProposal.__table__.update()
+        .where(ReviewProposal.target_application_id == app_id)
+        .values(target_application_id=None)
+    )
+    db.execute(sa_delete(ApplicationEvent).where(ApplicationEvent.application_id == app_id))
+    db.execute(sa_delete(Application).where(Application.id == app_id))
+    db.commit()
+    return {"deleted": app_id}
 
 
 @router.patch("/applications/{app_id}", response_model=ApplicationOut)
@@ -341,6 +371,45 @@ def _due_sort_key(r: dict) -> tuple:
     if r["due_date"]:
         return (0, r["due_date"] + "T00:00")
     return (1, "")
+
+
+@router.delete("/action-items/{item_id}")
+def delete_action_item(item_id: str, db: Session = Depends(get_db)) -> dict:
+    """Delete a deadline record (used for the Done list). The application is untouched."""
+    from ..services import trash
+
+    item = db.get(ActionItem, item_id)
+    if item is None:
+        raise not_found("action item not found")
+    app = db.get(Application, item.application_id)
+    trash.snapshot_deadline(db, item_id, f"{app.company.canonical_name if app else '?'} · {item.title}")
+    db.delete(item)
+    db.commit()
+    return {"deleted": item_id}
+
+
+@router.get("/trash/{kind}")
+def trash_peek(kind: str, db: Session = Depends(get_db)) -> dict:
+    """The most recent removal that can be recovered (or null)."""
+    from ..services import trash
+
+    if kind not in trash.KINDS:
+        raise not_found("unknown kind")
+    return {"last": trash.peek(db, kind)}
+
+
+@router.post("/trash/{kind}/restore")
+def trash_restore(kind: str, db: Session = Depends(get_db)) -> dict:
+    """Undo the most recent removal of this kind."""
+    from ..services import trash
+
+    try:
+        out = trash.restore_last(db, kind)
+    except trash.TrashError as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+    db.commit()
+    return out
 
 
 @router.post("/action-items/{item_id}", response_model=ActionItemOut)

@@ -386,6 +386,53 @@ dup.update({"name": "24_ibm_pm_ack_second_inbox", "provider_message_id": "o-m01"
             "internet_message_id": F[0]["internet_message_id"]})
 F.append(dup)
 
+# --- Regression cases modelled on real-world misclassifications (anonymised) ----------------
+# Event registrations are not job applications.
+add(
+    "25_hackathon_registration", pid="m25", frm="Initrode Inc.", addr="calendar@events-mail.example",
+    subject="Initrode Hackathon: Build at the Frontier of AI 的报名正在等待审核",
+    received="2027-02-20T03:09:00Z",
+    body="Initrode Inc.\n你的报名待审批，活动为\nInitrode Hackathon: Build at the Frontier of AI\n\n"
+    "11月14日星期六 9:00 - 17:00\n主办人需要批准你的注册后，你才能参加活动。批准后我们会发送邮件通知你。",
+    expected={"is_job_related": False, "events": [], "company": None, "role": None},
+    model=out(None, None, None, [], related=False),
+)
+add(
+    "26_portfolio_review_event", pid="m26", frm="Gamecon Events", addr="events@gamecon.example",
+    subject="Thank you for your submission to the Gamecon Portfolio & Resume Review - Participant ID: 222016",
+    received="2027-02-20T04:00:00Z",
+    body="Looking forward to seeing you in Anaheim.\n\nHey, Aimee! You're in! Gamecon Portfolio & Resume Review.\n"
+    "Bring a printed copy of your resume to the session.",
+    expected={"is_job_related": False, "events": [], "company": None, "role": None},
+    model=out(None, None, None, [], related=False),
+)
+add(
+    "27_jobboard_hired_near_you", pid="m27", frm="JobBoard", addr="messages-noreply@jobboard.example",
+    subject="Marketing Specialist: Hooli hired near you",
+    received="2027-02-21T12:00:00Z",
+    body="See who Hooli hired for Marketing Specialist roles near you. Explore 7.5K open jobs.",
+    expected={"is_job_related": False, "events": [], "company": None, "role": None},
+    model=out(None, None, None, [], related=False),
+)
+add(
+    "28_short_ack_no_role", pid="m28", frm="Cyberdyne", addr="no-reply@cyberdyne.example",
+    subject="Thank you for applying to Cyberdyne",
+    received="2027-02-22T15:00:00Z",
+    body="Hi Aimee,\n\nThank you for showing interest in joining our team and taking the time to apply to "
+    "Cyberdyne. We'll be reviewing your application shortly and will reach out on any next steps.\n\nCyberdyne Recruiting",
+    expected={"is_job_related": True, "events": ["application_confirmation"], "company": "Cyberdyne", "role": None},
+    model=out("Cyberdyne", None, None, [ev("application_confirmation", ["taking the time to apply to Cyberdyne"])]),
+)
+add(
+    "29_zh_rejection", pid="m29", frm="星云游戏", addr="hr@service.nebula-games.example",
+    subject="感谢应聘星云游戏",
+    received="2027-02-23T08:00:00Z",
+    body="孙同学，您好！\n\n感谢您应聘我们的游戏运营实习生职位。您的学识和资历给我们留下了良好的印象。遗憾的是，"
+    "您所应聘职位的要求与您的实际情况不太符合，因此暂时没有机会与您合作。\n\n我们已经将您的简历纳入人才库。",
+    expected={"is_job_related": True, "events": ["rejection"], "company": "星云游戏", "role": "游戏运营实习生"},
+    model=out("星云游戏", "游戏运营实习生", None, [ev("rejection", ["暂时没有机会与您合作"])]),
+)
+
 
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)

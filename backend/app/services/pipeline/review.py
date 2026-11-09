@@ -1,10 +1,22 @@
 """Human review actions. Every action writes an audit event and is idempotent."""
 from __future__ import annotations
 
+import re
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ...models import ActionItem, Application, ApplicationEvent, Assessment, Interview, ReviewProposal, utcnow
+from ...domain.normalize import extract_requisition_ids, normalize_company, normalize_req_id
+from ...models import (
+    ActionItem,
+    Application,
+    ApplicationEvent,
+    Assessment,
+    EmailMessage,
+    Interview,
+    ReviewProposal,
+    utcnow,
+)
 from .apply import apply_plan, audit, create_application_from_plan
 
 
@@ -69,7 +81,73 @@ def approve(
         locator={"proposal_id": p.id, "edits": {k: v for k, v in edits.items() if k != "actor"}},
     )
     db.flush()
+    if plan.get("create_application") and app is not None:
+        relink_sibling_proposals(db, p, app)
     return p
+
+
+_APPLICATION_ID_RE = re.compile(
+    r"\bapplication\s*(?:id|number|no\.?|#)\s*[:#]?\s*([A-Z0-9][A-Z0-9-]{3,})\b", re.IGNORECASE
+)
+
+
+def _proposal_keys(db: Session, p: ReviewProposal) -> tuple[set[str], str, tuple | None]:
+    """(ids, company key, thread key) used to group proposals about the same application."""
+    plan = p.proposed_changes or {}
+    msg = db.get(EmailMessage, p.email_message_id) if p.email_message_id else None
+    ids: set[str] = set()
+    req = normalize_req_id((plan.get("role") or {}).get("requisition_id"))
+    if req:
+        ids.add(req)
+    if msg is not None:
+        ids.update(extract_requisition_ids(msg.subject, msg.evidence_excerpt))
+        for m in _APPLICATION_ID_RE.finditer(f"{msg.subject or ''}\n{msg.evidence_excerpt or ''}"):
+            if v := normalize_req_id(m.group(1)):
+                ids.add(v)
+    company = plan.get("company") or {}
+    ckey = company.get("company_id") or normalize_company(company.get("name")) or (plan.get("sender_domain") or "")
+    thread = (msg.email_account_id, msg.provider_thread_id) if msg is not None and msg.provider_thread_id else None
+    return ids, ckey, thread
+
+
+def relink_sibling_proposals(db: Session, approved: ReviewProposal, app: Application) -> list[str]:
+    """After a create-application approval, point pending create proposals for the same
+    application (same email thread, or same requisition/application id at the same company)
+    at the new application instead of creating a duplicate. They still need approval."""
+    ids, ckey, thread = _proposal_keys(db, approved)
+    if not ids and thread is None:
+        return []
+    company_name = normalize_company((approved.proposed_changes or {}).get("company", {}).get("name"))
+    pending = db.execute(
+        select(ReviewProposal).where(
+            ReviewProposal.state == "pending",
+            ReviewProposal.proposal_type == "create_application",
+            ReviewProposal.id != approved.id,
+        )
+    ).scalars().all()
+    relinked: list[str] = []
+    for q in pending:
+        q_ids, q_ckey, q_thread = _proposal_keys(db, q)
+        q_name = normalize_company((q.proposed_changes or {}).get("company", {}).get("name"))
+        same_company = bool(ckey and ckey == q_ckey) or bool(company_name and company_name == q_name)
+        same_thread = thread is not None and thread == q_thread
+        shared = ids & q_ids
+        if not (same_thread or (shared and same_company)):
+            continue
+        why = "same email thread" if same_thread else f"same id {sorted(shared)[0]}"
+        plan = dict(q.proposed_changes or {})
+        plan["create_application"] = False
+        plan["target_application_id"] = app.id
+        plan["match"] = {"decision": "review", "application_id": app.id, "score": 1.0,
+                         "reason": f"{why} as an approved application"}
+        q.proposed_changes = plan
+        q.target_application_id = app.id
+        q.proposal_type = "match"
+        q.reason = f"Belongs to an application you just approved ({why}); approve to attach."
+        relinked.append(q.id)
+    if relinked:
+        db.flush()
+    return relinked
 
 
 def reject(db: Session, proposal_id: str, *, notes: str | None = None, actor: str = "user") -> ReviewProposal:

@@ -15,7 +15,7 @@ from ...models import Application, EmailMessage, ParsedMessage, ReviewProposal
 from .. import settings_service
 from ..extraction.extractor import ExtractionOutcome, MessageInput, extract
 from ..llm.ollama import LLMBackend, LLMError
-from .apply import apply_plan, build_plan, message_identity, route_plan
+from .apply import apply_plan, build_plan, create_application_from_plan, message_identity, route_plan
 from .ingest import drop_cached_body, load_cached_body
 
 logger = logging.getLogger("tracker.process")
@@ -65,6 +65,38 @@ def record_parse(db: Session, msg: EmailMessage, outcome: ExtractionOutcome) -> 
     return pm
 
 
+def _create_app(db: Session, plan: dict, msg: EmailMessage) -> Application | None:
+    """Create the application for a plan with no match. Missing company/role fall back
+    to the sender name / a placeholder rather than dropping the email."""
+    edits: dict = {"actor": "agent:auto_all"}
+    company_id = plan["company"].get("company_id")
+    if not plan["role"].get("title") and company_id:
+        # No role in the email: if this company has exactly one application, it is that one.
+        existing = db.execute(select(Application).where(Application.company_id == company_id)).scalars().all()
+        if len(existing) == 1:
+            return existing[0]
+    if not (plan["company"].get("resolved_name") or plan["company"].get("name")):
+        if not msg.sender_name:
+            return None
+        edits["company"] = msg.sender_name
+    if not plan["role"].get("title"):
+        edits["role_title"] = "Role not stated"
+    return create_application_from_plan(db, plan, edits)
+
+
+def message_input(msg: EmailMessage) -> MessageInput:
+    body = load_cached_body(msg.body_cache_ref)
+    if body is None:
+        body = msg.evidence_excerpt or ""
+    return MessageInput(
+        sender=f"{msg.sender_name or ''} <{msg.sender_address or ''}>".strip(),
+        subject=msg.subject or "",
+        body=body,
+        received_at=msg.received_at,
+        sent_at=msg.sent_at,
+    )
+
+
 def process_message(
     db: Session,
     msg: EmailMessage,
@@ -73,8 +105,11 @@ def process_message(
     policy: str | None = None,
     min_confidence: float | None = None,
     dry_run: bool = False,
+    outcome: ExtractionOutcome | None = None,
 ) -> dict:
-    """Process one stored message. Raises LLMError (caller decides to stop)."""
+    """Process one stored message. Raises LLMError (caller decides to stop).
+
+    Pass ``outcome`` when the extraction was already run outside the transaction."""
     policy = policy or settings_service.get(db, "auto_apply_policy")
     min_confidence = (
         min_confidence if min_confidence is not None else float(settings_service.get(db, "auto_apply_min_confidence"))
@@ -87,20 +122,8 @@ def process_message(
         msg.body_cache_ref = None
         return {"state": "duplicate"}
 
-    body = load_cached_body(msg.body_cache_ref)
-    if body is None:
-        body = msg.evidence_excerpt or ""
-    sender = f"{msg.sender_name or ''} <{msg.sender_address or ''}>".strip()
-    outcome = extract(
-        MessageInput(
-            sender=sender,
-            subject=msg.subject or "",
-            body=body,
-            received_at=msg.received_at,
-            sent_at=msg.sent_at,
-        ),
-        backend,
-    )  # LLMError propagates; nothing has been written yet
+    if outcome is None:
+        outcome = extract(message_input(msg), backend)  # LLMError propagates; nothing written yet
     msg.processing_attempts = (msg.processing_attempts or 0) + 1
     parsed = record_parse(db, msg, outcome)
     if outcome.extraction is None:
@@ -111,8 +134,8 @@ def process_message(
     ext = outcome.extraction
     actionable = [e for e in ext.events if e.type not in {"job_alert", "other"}]
     if not ext.is_job_related or not actionable:
-        if ext.needs_review and actionable:
-            pass  # contradictory output: fall through to review
+        if ext.needs_review and actionable and policy != "auto_all":
+            pass  # contradictory output: fall through to review (auto_all: never auto-create)
         else:
             msg.processing_state = "ignored"
             msg.processing_error = None
@@ -130,7 +153,13 @@ def process_message(
     msg.processing_state = "parsed"
     msg.processing_error = None
     result: dict = {"state": "parsed", "auto_apply": auto, "proposal_type": ptype, "reason": reason}
-    if auto and target is not None:
+    if policy == "auto_all":
+        app = target or _create_app(db, plan, msg)
+        if app is not None:
+            result["auto_apply"] = True
+            result["events"] = apply_plan(db, plan, app, actor="agent:auto_all", human_approved=True)
+            result["application_id"] = app.id
+    elif auto and target is not None:
         ids = apply_plan(db, plan, target, actor="agent:auto_policy", human_approved=False)
         result["events"] = ids
     else:
@@ -173,8 +202,14 @@ def process_pending(db: Session, backend: LLMBackend, *, limit: int = 200) -> Pr
     ).scalars().all()
     for msg in rows:
         try:
+            # Run the slow local-model call with no open transaction, so the sync never
+            # holds the SQLite write lock while waiting on the model (UI writes and the
+            # scheduler heartbeat would otherwise time out).
+            inp = message_input(msg)
+            db.commit()
+            outcome = extract(inp, backend)
             with db.begin_nested():
-                out = process_message(db, msg, backend)
+                out = process_message(db, msg, backend, outcome=outcome)
             db.commit()
         except LLMError as exc:
             db.rollback()

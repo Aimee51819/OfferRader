@@ -63,6 +63,9 @@ export interface Application {
   next_action: ActionItem | null;
   pending_reviews: number;
   source: string | null;
+  applied_at?: string | null;
+  source_email_link?: string | null;
+  source_email_subject?: string | null;
 }
 
 export interface AppEvent {
@@ -219,7 +222,11 @@ export interface PendingDeadline extends DeadlineInfo {
   event_type: string;
 }
 
+export type DeadlineType = "OA" | "Interview" | "Feedback" | "To do" | "Other";
+
 export interface Deadlines {
+  items: (ActionItem & { deadline_type: DeadlineType })[];
+  done: (ActionItem & { deadline_type: DeadlineType })[];
   buckets: Record<string, ActionItem[]>;
   pending_review: PendingDeadline[];
   now: string;
@@ -254,7 +261,7 @@ export interface Account {
 }
 
 export interface Settings {
-  auto_apply_policy: "review_first" | "auto_harmless";
+  auto_apply_policy: "auto_all" | "review_first" | "auto_harmless";
   auto_apply_min_confidence: number;
   poll_interval_seconds: number;
   auto_sync_enabled: boolean;

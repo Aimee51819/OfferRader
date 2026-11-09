@@ -24,19 +24,19 @@ export const STAGE_LABELS: Record<Stage, string> = {
 };
 
 export const STAGE_COLORS: Record<Stage, string> = {
-  tracked: "#5d574f",
-  ready: "#8b857d",
-  submitted: "#7d9bc1",
-  acknowledged: "#6d8fb8",
-  assessment_invited: "#c8734a",
-  assessment_completed: "#b88a5a",
-  screening: "#a58fc4",
-  interviewing: "#9b7fd1",
-  offer: "#7aa35f",
-  accepted: "#5f9a4a",
-  rejected: "#d2564f",
-  withdrawn: "#6f6a63",
-  closed: "#4d4943",
+  tracked: "#b9b2a8",
+  ready: "#a9a196",
+  submitted: "#9aabbd",
+  acknowledged: "#8a9fb4",
+  assessment_invited: "#c9a978",
+  assessment_completed: "#b8a58a",
+  screening: "#a99bb5",
+  interviewing: "#9a88aa",
+  offer: "#8fa88a",
+  accepted: "#7c9a77",
+  rejected: "#c48f88",
+  withdrawn: "#aaa39b",
+  closed: "#9d968e",
 };
 
 export const TERMINAL: Stage[] = ["offer", "accepted", "rejected", "withdrawn", "closed"];
@@ -54,12 +54,12 @@ export const URGENCY_LABELS: Record<string, string> = {
 };
 
 export const URGENCY_COLORS: Record<string, string> = {
-  overdue: "#d2564f",
-  within_3h: "#e0663f",
-  within_24h: "#c8734a",
-  within_72h: "#c9a24a",
-  later: "#7d9bc1",
-  no_reliable_deadline: "#8b857d",
+  overdue: "#b5736b",
+  within_3h: "#c0806f",
+  within_24h: "#c39a74",
+  within_72h: "#bfa776",
+  later: "#8a9fb4",
+  no_reliable_deadline: "#a9a196",
 };
 
 const fmt = (opts: Intl.DateTimeFormatOptions, tz = DISPLAY_TZ) =>
@@ -90,7 +90,7 @@ export function formatDateOnly(yyyyMmDd: string): string {
 /** Human description of a deadline that never invents precision it doesn't have. */
 export function describeDue(item: Pick<ActionItem, "due_at" | "due_date" | "due_precision">, tz = DISPLAY_TZ): string {
   if (item.due_at) return formatInstant(item.due_at, tz);
-  if (item.due_date) return `${formatDateOnly(item.due_date)} (date only — no time given)`;
+  if (item.due_date) return formatDateOnly(item.due_date);
   return "No reliable deadline";
 }
 

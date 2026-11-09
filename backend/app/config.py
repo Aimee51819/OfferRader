@@ -117,6 +117,9 @@ class Settings(BaseSettings):
     # --- Mail handling limits ---
     max_body_bytes: int = 512_000
     max_messages_per_sync: int = 200
+    # Default-deny gate before the model: only ATS/recruiting senders or mail with an
+    # application lifecycle phrase is parsed. Set false to send every unblocked email.
+    job_signal_gate: bool = True
 
     @property
     def data_path(self) -> Path:

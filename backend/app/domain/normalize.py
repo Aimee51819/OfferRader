@@ -254,19 +254,21 @@ def is_shared_sender_domain(domain: str | None) -> bool:
 
 
 def infer_category(title: str | None) -> str | None:
+    """Category from the role title. Order matters: the first matching rule wins.
+
+    * "solution(s)" anywhere -> SE (solutions engineer / architect / consultant)
+    * "product" or "production" -> PM
+    * "software" -> SDE/SWE
+    """
     t = normalize_title(title)
     if not t:
-        return None
-    if "technical program manager" in t or "program manager" in t:
-        return "TPM"
-    if "product manager" in t or "product management" in t:
-        return "PM"
-    if "solutions architect" in t or "solution architect" in t:
-        return "SA"
-    if "solutions engineer" in t or "solution engineer" in t or "sales engineer" in t:
+        return "Other" if (title or "").strip() else None
+    if "solution" in t:
         return "SE"
+    if "product" in t or "production" in t:
+        return "PM"
+    if "software" in t or "developer" in t or "sde" in t.split() or "swe" in t.split():
+        return "SDE/SWE"
     if "data" in t or "analytics" in t or "machine learning" in t:
         return "Data"
-    if "software" in t or "developer" in t or "engineer" in t:
-        return "SWE"
     return "Other"

@@ -643,6 +643,26 @@ def _side_effects(
             select(Assessment).where(Assessment.application_id == app.id, Assessment.state.in_(("invited", "started")))
         ).scalars():
             a.state = "cancelled"
+    elif etype in {"application_confirmation", "application_received", "portal_update"}:
+        d = ev.get("deadline") or {}
+        if d.get("due_at") or d.get("due_date"):
+            # A date the employer gave for its own reply ("we'll get back to you within
+            # 72 hours"), or a step it asks for after applying. Tracked as feedback, not OA.
+            fields = _deadline_fields(d, received)
+            fields["state"] = "open"
+            db.add(
+                ActionItem(
+                    application_id=app.id,
+                    source_event_id=row.id,
+                    # An explicit request ("complete your application within 72 hours") is a
+                    # to-do for the candidate; otherwise it is the employer's reply window.
+                    kind="todo" if ev.get("action_required") else "feedback",
+                    title=ev.get("action_required") or "Expected response",
+                    instruction=ev.get("action_required"),
+                    evidence_quote=d.get("raw") or ev.get("evidence_quote"),
+                    **fields,
+                )
+            )
 
 
 def _close_items(db: Session, app: Application, *, kinds: tuple[str, ...] | None, state: str) -> None:

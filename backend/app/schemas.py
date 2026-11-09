@@ -10,7 +10,7 @@ Stage = Literal[
     "tracked", "ready", "submitted", "acknowledged", "assessment_invited", "assessment_completed",
     "screening", "interviewing", "offer", "accepted", "rejected", "withdrawn", "closed",
 ]
-Category = Literal["PM", "TPM", "SE", "SA", "SWE", "Data", "Other"]
+Category = Literal["PM", "SE", "SDE/SWE", "Data", "Other"]
 Channel = Literal["company_site", "ATS", "referral", "LinkedIn", "other"]
 
 
@@ -240,6 +240,9 @@ class ApplicationOut(ORM):
     next_action: ActionItemOut | None = None
     pending_reviews: int = 0
     source: str | None = None
+    applied_at: datetime | None = None
+    source_email_link: str | None = None
+    source_email_subject: str | None = None
 
 
 class EvidenceOut(BaseModel):
@@ -276,7 +279,7 @@ class ReviewRejectIn(BaseModel):
 
 
 class SettingsUpdate(BaseModel):
-    auto_apply_policy: Literal["review_first", "auto_harmless"] | None = None
+    auto_apply_policy: Literal["auto_all", "review_first", "auto_harmless"] | None = None
     auto_apply_min_confidence: float | None = Field(None, ge=0.5, le=1.0)
     poll_interval_seconds: int | None = Field(None, ge=300, le=86400)
     auto_sync_enabled: bool | None = None

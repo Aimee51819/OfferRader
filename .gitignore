@@ -47,3 +47,6 @@ backend/demo-data/
 eval-report.json
 body_cache/
 backups/
+
+# Local run logs
+*.log

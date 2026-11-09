@@ -67,6 +67,11 @@ export const api = {
   dismissNotification: (id: string) => post(`/api/dashboard/notifications/${id}/dismiss`),
 
   applications: (f: ApplicationFilters = {}) => request<Application[]>(`/api/applications${qs(f)}`),
+  trashPeek: (kind: "application" | "deadline") =>
+    request<{ last: { id: string; label: string; deleted_at: string; count: number } | null }>(`/api/trash/${kind}`),
+  trashRestore: (kind: "application" | "deadline") => post<{ restored: string; label: string }>(`/api/trash/${kind}/restore`),
+  deleteActionItem: (id: string) => request<{ deleted: string }>(`/api/action-items/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  deleteApplication: (id: string) => request<{ deleted: string }>(`/api/applications/${encodeURIComponent(id)}`, { method: "DELETE" }),
   application: (id: string) => request<ApplicationDetail>(`/api/applications/${id}`),
   createApplication: (body: Record<string, unknown>) => post<Application>("/api/applications", body),
   updateApplication: (id: string, body: Record<string, unknown>) =>

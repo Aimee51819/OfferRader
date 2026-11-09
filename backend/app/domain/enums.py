@@ -74,7 +74,7 @@ EVENT_TO_STAGE: dict[str, str | None] = {
     "other": None,
 }
 
-CATEGORIES = ("PM", "TPM", "SE", "SA", "SWE", "Data", "Other")
+CATEGORIES = ("PM", "SE", "SDE/SWE", "Data", "Other")
 CHANNELS = ("company_site", "ATS", "referral", "LinkedIn", "other")
 SUBMISSION_EVIDENCE = ("manual_confirmed", "agent_receipt", "acknowledgment_email")
 EVENT_SOURCES = ("email", "manual", "agent", "import")

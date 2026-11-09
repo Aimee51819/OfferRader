@@ -13,7 +13,6 @@ describe("deadline formatting", () => {
   it("never adds a time to a date-only deadline", () => {
     const s = describeDue({ due_at: null, due_date: "2027-03-20", due_precision: "day" });
     expect(s).toContain("Mar 20, 2027");
-    expect(s).toContain("date only");
     expect(s).not.toMatch(/\d{1,2}:\d{2}/);
     expect(formatDateOnly("2027-03-20")).toContain("Sat");
   });

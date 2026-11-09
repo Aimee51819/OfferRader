@@ -150,7 +150,23 @@ class Extraction(_Strict):
 
 def json_schema() -> dict:
     """Schema passed to Ollama's structured-output ``format`` parameter."""
-    return Extraction.model_json_schema()
+    schema = Extraction.model_json_schema()
+    # Pydantic only lists fields without defaults as required. Under constrained
+    # decoding the model may then close an object early and omit company/role/events
+    # or an event's deadline, so require every property of every object (nullable
+    # fields can still be null).
+    def _require_all(node):
+        if isinstance(node, dict):
+            if "properties" in node:
+                node["required"] = list(node["properties"])
+            for v in node.values():
+                _require_all(v)
+        elif isinstance(node, list):
+            for v in node:
+                _require_all(v)
+
+    _require_all(schema)
+    return schema
 
 
 EXAMPLE = {

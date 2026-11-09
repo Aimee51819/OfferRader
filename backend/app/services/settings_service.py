@@ -14,7 +14,9 @@ from ..models import NotificationRule, Setting
 DEFAULTS: dict[str, Any] = {
     # review_first: every email-derived change waits for approval.
     # auto_harmless: high-confidence, non-sensitive, unambiguous changes apply directly.
-    "auto_apply_policy": "review_first",
+    # auto_all (default): every recognised application email is applied directly; the
+    # dashboard is the place to correct or remove anything wrong.
+    "auto_apply_policy": "auto_all",
     "auto_apply_min_confidence": 0.9,
     "poll_interval_seconds": env.email_poll_interval_seconds,
     # Automatic background sync stays off until the user runs a dry-run and enables it.

@@ -99,6 +99,74 @@ _JOB_PLATFORM_DOMAINS: frozenset[str] = frozenset(
     }
 )
 
+# ATS / assessment / campus-recruiting senders. Mail from these always reaches the model.
+_ATS_SENDER_DOMAINS: frozenset[str] = _JOB_PLATFORM_DOMAINS | frozenset(
+    {
+        "myworkdayjobs.com", "workday.com", "greenhouse-mail.io", "hire.lever.co",
+        "successfactors.com", "successfactors.eu", "oraclecloud.com", "brassring.com",
+        "eightfold.ai", "avature.net", "tal.net", "phenompeople.com", "paradox.ai",
+        "workablemail.com", "workable.com", "recruitee.com", "teamtailor.com", "pinpointhq.com",
+        "jazzhr.com", "applytojob.com", "breezy.hr", "dover.com", "gem.com", "beamery.com",
+        "hackerrank.com", "hackerrankforwork.com", "codesignal.com", "hirevue.com",
+        "hirevue-app.eu", "modernhire.com", "pymetrics.ai", "harver.com", "shl.com",
+        "talentlens.com", "criteriacorp.com", "codility.com", "karat.io", "joinhandshake.com",
+        "mokahr.com", "hotjob.cn", "zhiye.com", "beisen.com", "nowcoder.com",
+    }
+)
+
+# Local-part / subdomain hints that a company's own recruiting team is writing.
+_RECRUITING_SENDER_HINT = re.compile(
+    r"(?<![a-z])(careers?|recruit\w*|talent\w*|hiring|campus\w*|earlycareers|jobs?|staffing|"
+    r"candidates?)(?![a-z])",
+    re.IGNORECASE,
+)
+
+# Phrases that appear in real application lifecycle mail (EN + ZH). Deliberately specific:
+# generic words like "job", "hiring" or "offer" also appear in job-board and retail marketing.
+_JOB_LIFECYCLE_RE = re.compile(
+    r"(thank(?:s| you) for (?:your )?(?:appl|submitting your application|your interest in)|"
+    r"(?:we(?:'ve| have)?) (?:received|got) your application|got your .{0,40}application|"
+    r"your application (?:to|for|with|has|was|is|status)|"
+    r"application (?:received|submitted|update|status|id|number)|"
+    r"candidate (?:home|portal|id|profile)|requisition|"
+    r"(?:online|coding|technical|video|digital) (?:assessment|test|interview)|assessment invitation|"
+    r"complete (?:the|your|an|this) (?:assessment|test|challenge)|"
+    r"interview (?:invitation|invite|request|schedul|availability|confirmation)|"
+    r"(?:schedule|book) (?:an?|your) (?:interview|call)|phone screen|recruiter (?:call|screen)|"
+    r"next steps? in (?:the|our) (?:hiring|recruiting|recruitment|interview|selection) process|"
+    r"unfortunately|regret to inform|not (?:be )?(?:moving|move) forward|"
+    r"(?:move|moving) forward with other candidates|decided to (?:pursue|proceed with) other|"
+    r"position has been filled|offer (?:letter|of employment)|pleased to (?:offer|extend)|"
+    r"you(?:'ve| have) been referred|"
+    r"感谢.{0,4}(?:应聘|申请|投递|关注)|简历.{0,4}(?:已|收到|投递|筛选)|"
+    r"(?:申请|投递).{0,4}(?:成功|已收到|已提交|进度|状态)|网申|笔试|测评|面试|录用|"
+    r"人才库|遗憾地通知|很遗憾|内推)",
+    re.IGNORECASE,
+)
+
+
+def is_ats_sender(sender: str) -> bool:
+    domain = _extract_domain(sender)
+    return any(domain == d or domain.endswith("." + d) for d in _ATS_SENDER_DOMAINS)
+
+
+def has_job_signal(sender: str, subject: str, body: str) -> str | None:
+    """Positive gate: return why this email looks like application mail, or None.
+
+    Only mail with a positive signal is sent to the local model; everything else is
+    ignored deterministically (fast, and the small model never sees newsletters).
+    """
+    if is_ats_sender(sender):
+        return "ats_sender"
+    head = f"{subject}\n{(body or '')[:4000]}"
+    if _JOB_LIFECYCLE_RE.search(head):
+        return "lifecycle_phrase"
+    m = re.search(r"([\w.+\-]+)@([\w.\-]+)", sender or "")
+    if m and _RECRUITING_SENDER_HINT.search(f"{m.group(1)}.{m.group(2)}") and not is_blocked(sender):
+        return "recruiting_sender"
+    return None
+
+
 # Sender display-name keywords that almost certainly indicate non-job mail.
 _BLOCKED_NAME_KEYWORDS: tuple[str, ...] = (
     "no-reply@olo",

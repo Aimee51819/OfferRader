@@ -5,7 +5,7 @@ import json
 
 from ...domain.extraction_schema import EXAMPLE
 
-PROMPT_VERSION = "2026-11-05.1"
+PROMPT_VERSION = "2026-11-07.1"
 
 SYSTEM_PROMPT = """You extract facts from ONE recruiting-related email for a personal job-application tracker.
 
@@ -36,6 +36,13 @@ Return ONLY one JSON object matching the schema. Rules:
    gives a calendar date without a time. Leave normalized_at_utc null; code computes it.
 6. evidence_quotes: 1-3 SHORT exact substrings of the email supporting each event.
 7. A job advertisement or alert is never proof that an application was submitted.
+   Likewise, a registration or RSVP for an EVENT (hackathon, conference, webinar, career fair,
+   info session, workshop, portfolio or resume review session, networking event) is NOT a job
+   application: set is_job_related=false and return no events for it, even if it says
+   "registration pending", "approved" or "you're in". This applies only to events you attend. An
+   email about applying for a specific job or internship ("thank you for applying", "we received
+   your application", an assessment invitation, an interview, a rejection or an offer for that
+   position) is still job related and keeps its normal event type.
 8. Set needs_review=true and list ambiguities when the company, role, event, or deadline is unclear
    or conflicting. Confidence values are 0..1.
 

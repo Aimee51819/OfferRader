@@ -94,14 +94,13 @@ Or as a menu-bar app serving the built UI on http://127.0.0.1:8000:
 make app
 ```
 
-## 6. First sync (dry run first)
+## 6. First sync
 
 1. **Settings → Connect Gmail / Connect Outlook** **(you)**. Your browser shows the provider's consent screen; approve the read-only access.
 2. Choose scope per account: Gmail *Inbox only* or all mail (default, which includes the Promotions/Updates tabs where ATS mail often lands), plus optionally *Include spam*. Outlook can add the *Junk* folder. The look-back defaults to 60 days.
-3. Click **Fetch only**. This reads recent mail into the local store without parsing.
-4. Click **Dry run on fetched mail**. It shows what the agent *would* do and saves nothing.
-5. Click **Sync now**, then work through the **Review queue**.
-6. Once you're satisfied, turn on **Automatic background sync**. Leave the policy on *Always ask me first*, or switch to *Apply routine updates automatically*. Even then, terminal and ambiguous items still go to review.
+3. Press **Sync now** on the dashboard. Emails from applicant-tracking systems or with real application wording are parsed by the local model; everything else is skipped without a model call.
+4. Recognised applications go straight to the dashboard. If something is wrong, remove it with **✕** (you can undo with **Recover**).
+5. Optionally turn on **Automatic background sync** in Settings.
 
 After the Mac sleeps, the scheduler runs once on wake and resumes from the last saved cursor. The dashboard warns if no sync has succeeded for two hours (configurable).
 

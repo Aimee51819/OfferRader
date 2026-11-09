@@ -15,14 +15,14 @@ from datetime import datetime
 from pydantic import ValidationError
 
 from ...config import settings
-from ...domain.extraction_schema import SCHEMA_VERSION, Extraction, json_schema
+from ...domain.extraction_schema import SCHEMA_VERSION, Event, Extraction, json_schema
 from ...domain.normalize import (
     detect_assessment_provider,
     extract_requisition_ids,
     normalize_req_id,
 )
 from ..llm.ollama import LLMBackend, LLMError
-from ..mail.prefilter import clean_body, is_blocked, is_otp_or_verification
+from ..mail.prefilter import clean_body, has_job_signal, is_blocked, is_otp_or_verification
 from .prompt import PROMPT_VERSION, SYSTEM_PROMPT, USER_TEMPLATE
 
 _RECRUITING_WORDS = re.compile(
@@ -112,6 +112,12 @@ def prefilter(msg: MessageInput) -> str | None:
     """Return a skip reason, or None to continue to the model."""
     if is_otp_or_verification(msg.subject or "", msg.body or ""):
         return "otp_or_verification"
+    if settings.job_signal_gate:
+        # Default-deny: only mail from an ATS/recruiting sender or with an application
+        # lifecycle phrase reaches the model (see mail.prefilter.has_job_signal).
+        if has_job_signal(msg.sender or "", msg.subject or "", msg.body or "") is None:
+            return "no_job_signal"
+        return None
     blob = f"{msg.subject}\n{(msg.body or '')[:3000]}"
     if is_blocked(msg.sender or "") and not _RECRUITING_WORDS.search(blob):
         return "blocked_sender_no_recruiting_terms"
@@ -243,7 +249,52 @@ def extract(msg: MessageInput, backend: LLMBackend) -> ExtractionOutcome:
     )
     if ext is not None:
         outcome.validation_errors = _post_validate(ext, msg, prepared, signals)
+        note = _rule_backstop(ext, msg, prepared)
+        if note:
+            outcome.validation_errors.append(note)
     return outcome
+
+
+# Unambiguous lifecycle wording. Used only as a backstop when the model returns no
+# actionable event; the result is always sent to human review, never auto-applied.
+_BACKSTOP_REJECTION = re.compile(
+    r"(unfortunately,?[^.\n]{0,160}?(?:not|won't|will not|unable|decided|other candidates)[^.\n]{0,80}|"
+    r"regret to inform[^.\n]{0,120}|(?:won't|will not|not) be moving forward[^.\n]{0,80}|"
+    r"decided to (?:pursue|move forward with|proceed with) other[^.\n]{0,80}|"
+    r"position has been filled|很遗憾[^。\n]{0,60}|遗憾地通知[^。\n]{0,60}|暂时没有机会[^。\n]{0,40})",
+    re.IGNORECASE,
+)
+_BACKSTOP_SUBMISSION = re.compile(
+    r"(thank(?:s| you)(?: so much)? for (?:applying|your application|submitting your application|"
+    r"taking the time to apply)[^.\n]{0,80}|(?:taking|took) the time to apply[^.\n]{0,60}|"
+    r"(?:the )?time you (?:took|take|spent) to apply[^.\n]{0,60}|"
+    r"(?:we(?:'ve| have)?) (?:received|got) your application|"
+    r"application (?:has been |was )?(?:received|submitted)|successfully submitted your[^.\n]{0,60}|"
+    r"感谢.{0,4}(?:应聘|申请|投递)[^。\n]{0,40}|申请已(?:收到|提交))",
+    re.IGNORECASE,
+)
+
+
+def _rule_backstop(ext: Extraction, msg: MessageInput, prepared: str) -> str | None:
+    """If the model found no application event but the wording is unambiguous, add one.
+
+    Small local models sometimes label a plain "thanks for applying" or a rejection as
+    not job related. Rather than silently ignoring such mail, add a low-confidence event
+    with the matched wording as evidence and force review.
+    """
+    if any(e.type not in {"job_alert", "other"} for e in ext.events):
+        return None
+    text = f"{msg.subject or ''}\n{prepared or ''}"
+    for etype, pattern in (("rejection", _BACKSTOP_REJECTION), ("application_confirmation", _BACKSTOP_SUBMISSION)):
+        m = pattern.search(text)
+        if m:
+            quote = m.group(0).strip()[:200]
+            ext.events.append(Event(type=etype, evidence_quotes=[quote], confidence=0.5))
+            ext.is_job_related = True
+            ext.needs_review = True
+            ext.ambiguities.append(f"model found no event; rule backstop added {etype}")
+            return f"rule_backstop: {etype}"
+    return None
 
 
 __all__ = ["ExtractionOutcome", "LLMError", "MessageInput", "extract", "prepare_body"]
